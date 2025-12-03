@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/go-kratos/kratos/v2/transport/http"
+	"github.com/go-lynx/lynx-http/conf"
 	"github.com/go-lynx/lynx/log"
 	"github.com/go-lynx/lynx/observability/metrics"
 	"github.com/go-lynx/lynx/plugins"
-	"github.com/go-lynx/lynx-http/conf"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/types/known/durationpb"

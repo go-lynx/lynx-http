@@ -14,8 +14,8 @@ import (
 	"github.com/go-kratos/kratos/v2/middleware/tracing"
 	"github.com/go-kratos/kratos/v2/transport"
 	"github.com/go-lynx/lynx"
-	"github.com/go-lynx/lynx/log"
 	"github.com/go-lynx/lynx-http/conf"
+	"github.com/go-lynx/lynx/log"
 	"google.golang.org/protobuf/proto"
 )
 
