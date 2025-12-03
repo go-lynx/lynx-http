@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	"github.com/go-kratos/kratos/v2/transport/http"
-	"github.com/go-lynx/lynx/app"
-	"github.com/go-lynx/lynx/app/log"
+	"github.com/go-lynx/lynx"
+	"github.com/go-lynx/lynx/log"
 )
 
 // tlsLoad creates and configures TLS settings for the HTTP server.
@@ -21,7 +21,7 @@ import (
 //   - error: Any error that occurred during TLS configuration
 func (h *ServiceHttp) tlsLoad() (http.ServerOption, error) {
 	// Get the certificate provider
-	certProvider := app.Lynx().Certificate()
+	certProvider := lynx.Lynx().Certificate()
 	if certProvider == nil {
 		return nil, fmt.Errorf("certificate provider not configured")
 	}
@@ -58,7 +58,7 @@ func (h *ServiceHttp) tlsLoad() (http.ServerOption, error) {
 	// Create TLS configuration
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
-		ServerName:   app.GetName(),
+		ServerName:   lynx.GetName(),
 		ClientAuth:   tls.ClientAuthType(h.conf.GetTlsAuthType()),
 	}
 

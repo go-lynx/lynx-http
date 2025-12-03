@@ -2,6 +2,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -11,9 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-lynx/lynx/app/log"
-	"github.com/go-lynx/lynx/app/observability/metrics"
-	"github.com/go-lynx/lynx/plugins/service/http/conf"
+	"github.com/go-lynx/lynx/log"
+	"github.com/go-lynx/lynx/observability/metrics"
+	"github.com/go-lynx/lynx-http/conf"
 	"github.com/prometheus/client_golang/prometheus"
 )
 

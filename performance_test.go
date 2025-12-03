@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-lynx/lynx/plugins/service/http/conf"
+	"github.com/go-lynx/lynx-http/conf"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
