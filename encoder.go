@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-kratos/kratos/v2/errors"
 	"github.com/go-kratos/kratos/v2/transport/http"
-	"github.com/go-lynx/lynx/app/log"
+	"github.com/go-lynx/lynx/log"
 	"google.golang.org/protobuf/runtime/protoimpl"
 )
 

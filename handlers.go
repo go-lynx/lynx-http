@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-lynx/lynx/app/log"
+	"github.com/go-lynx/lynx/log"
 )
 
 // notFoundHandler returns a 404 handler.

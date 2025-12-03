@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-kratos/kratos/v2/middleware"
 	"github.com/go-kratos/kratos/v2/transport"
-	"github.com/go-lynx/lynx/app/log"
+	"github.com/go-lynx/lynx/log"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"

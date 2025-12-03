@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/go-kratos/kratos/v2/middleware"
-	"github.com/go-lynx/lynx/plugins/service/http/conf"
+	"github.com/go-lynx/lynx-http/conf"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/types/known/durationpb"
 )

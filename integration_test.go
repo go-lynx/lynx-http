@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-lynx/lynx/plugins/service/http/conf"
+	"github.com/go-lynx/lynx-http/conf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/durationpb"

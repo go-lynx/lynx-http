@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-kratos/kratos/v2/middleware"
 	"github.com/go-kratos/kratos/v2/transport"
-	"github.com/go-lynx/lynx/app/log"
+	"github.com/go-lynx/lynx/log"
 )
 
 // CircuitBreakerState represents the state of a circuit breaker
