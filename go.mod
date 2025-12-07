@@ -7,7 +7,7 @@ toolchain go1.25.3
 require (
 	github.com/go-kratos/kratos/contrib/middleware/validate/v2 v2.0.0-20250527152916-d6f5f00cf562
 	github.com/go-kratos/kratos/v2 v2.9.1
-	github.com/go-lynx/lynx v1.2.3
+	github.com/go-lynx/lynx v1.5.0
 	github.com/prometheus/client_golang v1.23.0
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/otel/trace v1.37.0
@@ -58,5 +58,3 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/go-lynx/lynx => ../lynx
