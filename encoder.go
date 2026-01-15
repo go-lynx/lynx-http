@@ -59,19 +59,32 @@ func ResponseEncoder(w http.ResponseWriter, r *http.Request, data interface{}) e
 func EncodeErrorFunc(w http.ResponseWriter, r *http.Request, err error) {
 	// Convert the error to a Kratos Error entity
 	se := errors.FromError(err)
+
+	// Detect module base code from error reason or use default
+	moduleBase := detectModuleBase(se.Reason)
+
+	// Map ErrorReason to business code
+	businessCode := BusinessCodeMapper(se.Reason, moduleBase)
+
+	// Only return business code, not message, to avoid exposing sensitive information to frontend
 	res := &Response{
-		Code:    int(se.Code),
-		Message: se.Message,
+		Code: businessCode,
+		// Message field removed for security reasons
 	}
 	codec, _ := http.CodecForRequest(r, "Accept")
 	body, err := codec.Marshal(res)
 	if err != nil {
-		w.WriteHeader(nhttp.StatusInternalServerError)
+		w.WriteHeader(nhttp.StatusOK)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	// Set HTTP Status Code
-	w.WriteHeader(nhttp.StatusInternalServerError)
+	// For security, return 200 for all errors to avoid exposing error information in HTTP status
+	// Alternatively, you can use the original HTTP status code:
+	// httpStatusCode := nhttp.StatusInternalServerError
+	// if se.Code > 0 && se.Code >= 400 && se.Code < 600 {
+	//     httpStatusCode = int(se.Code)
+	// }
+	w.WriteHeader(nhttp.StatusOK)
 	_, wErr := w.Write(body)
 	if wErr != nil {
 		log.Error("write error", wErr)
