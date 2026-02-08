@@ -337,25 +337,21 @@ security:
 
 ## Error Handling
 
-The plugin provides comprehensive error handling:
+The plugin is **business-agnostic**: it does not embed any application-specific error codes or module names. By default, error responses use a numeric `code` from Kratos (`se.Code`) or 500.
+
+To use your own error code scheme (e.g. per-module business codes), set the optional **ErrorCodeMapper** on the plugin before start:
 
 ```go
-// Custom error encoder
-func customErrorEncoder(w http.ResponseWriter, r *http.Request, err error) {
-    // Your custom error handling logic
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusInternalServerError)
-    json.NewEncoder(w).Encode(map[string]string{
-        "error": err.Error(),
-        "code":  "INTERNAL_ERROR",
-    })
+httpPlugin := http.NewServiceHttp()
+// Optional: map Kratos errors to your application's response codes
+httpPlugin.ErrorCodeMapper = func(se *errors.Error) int {
+    // Your business logic: e.g. map se.Reason to your code range
+    return myAppErrorCode(se)
 }
-
-// Configure custom error handling
-config := &conf.Http{
-    // ... other config
-}
+// Then register and start as usual
 ```
+
+If `ErrorCodeMapper` is nil, the plugin uses `se.Code` or 500. For fully custom encoding you can still replace the error encoder via the server API.
 
 ## Graceful Shutdown
 

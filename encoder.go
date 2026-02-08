@@ -56,20 +56,13 @@ func ResponseEncoder(w http.ResponseWriter, r *http.Request, data interface{}) e
 	return nil
 }
 
+// EncodeErrorFunc encodes a Kratos error to a generic JSON response with "code" (Kratos Code or 500).
+// It is business-agnostic; for custom codes, use ServiceHttp.ErrorCodeMapper or your own encoder.
 func EncodeErrorFunc(w http.ResponseWriter, r *http.Request, err error) {
-	// Convert the error to a Kratos Error entity
 	se := errors.FromError(err)
-
-	// Detect module base code from error reason or use default
-	moduleBase := detectModuleBase(se.Reason)
-
-	// Map ErrorReason to business code
-	businessCode := BusinessCodeMapper(se.Reason, moduleBase)
-
-	// Only return business code, not message, to avoid exposing sensitive information to frontend
+	code := defaultErrorCode(se)
 	res := &Response{
-		Code: businessCode,
-		// Message field removed for security reasons
+		Code: code,
 	}
 	codec, _ := http.CodecForRequest(r, "Accept")
 	body, err := codec.Marshal(res)

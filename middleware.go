@@ -48,16 +48,13 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 		log.Infof("Logging middleware enabled")
 	}
 
-	// Metrics middleware
-	if h.conf.Middleware.EnableMetrics {
-		middlewares = append(middlewares, h.metricsMiddleware())
-		log.Infof("Metrics middleware enabled")
-	}
-
-	// Enhanced response wrapper middleware (integrated with metrics)
+	// Metrics: use either standalone metricsMiddleware or TracerLogPackWithMetrics to avoid duplicate metrics
 	if h.conf.Middleware.EnableTracing && h.conf.Middleware.EnableLogging && h.conf.Middleware.EnableMetrics {
 		middlewares = append(middlewares, TracerLogPackWithMetrics(h))
-		log.Infof("TracerLogPackWithMetrics middleware enabled")
+		log.Infof("TracerLogPackWithMetrics middleware enabled (tracing + logging + metrics)")
+	} else if h.conf.Middleware.EnableMetrics {
+		middlewares = append(middlewares, h.metricsMiddleware())
+		log.Infof("Metrics middleware enabled")
 	}
 
 	// Request parameter validation middleware
@@ -78,10 +75,10 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 		log.Infof("Rate limit middleware enabled")
 	}
 
-	// Connection limit middleware
+	// Concurrent request limit middleware (limits in-flight requests, not TCP connections)
 	if h.maxConnections > 0 || h.maxConcurrentRequests > 0 {
 		middlewares = append(middlewares, h.connectionLimitMiddleware())
-		log.Infof("Connection limit middleware enabled")
+		log.Infof("Concurrent request limit middleware enabled")
 	}
 
 	// Circuit breaker middleware
@@ -102,14 +99,13 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 	return middlewares
 }
 
-// connectionLimitMiddleware returns a connection limit middleware.
-// The semaphores are initialized once and reused across all requests.
+// connectionLimitMiddleware returns a middleware that limits concurrent in-flight requests (and optionally a separate cap for connection-pool metrics).
+// Semaphores are initialized once and reused across all requests.
 func (h *ServiceHttp) connectionLimitMiddleware() middleware.Middleware {
-	// Initialize semaphores once (thread-safe)
 	h.semInitOnce.Do(func() {
 		if h.maxConnections > 0 {
 			h.connectionSem = make(chan struct{}, h.maxConnections)
-			log.Infof("Initialized connection semaphore with capacity: %d", h.maxConnections)
+			log.Infof("Initialized concurrent request semaphore with capacity: %d", h.maxConnections)
 		}
 		if h.maxConcurrentRequests > 0 {
 			h.requestSem = make(chan struct{}, h.maxConcurrentRequests)
@@ -119,7 +115,7 @@ func (h *ServiceHttp) connectionLimitMiddleware() middleware.Middleware {
 
 	return func(handler middleware.Handler) middleware.Handler {
 		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
-			// Apply connection limit
+			// Apply concurrent request limit (maxConnections cap)
 			if h.connectionSem != nil {
 				select {
 				case h.connectionSem <- struct{}{}:
@@ -139,7 +135,7 @@ func (h *ServiceHttp) connectionLimitMiddleware() middleware.Middleware {
 						}
 					}()
 				default:
-					// Connection limit exceeded
+					// Concurrent request limit exceeded
 					if h.errorCounter != nil {
 						method := "unknown"
 						path := "unknown"
@@ -152,7 +148,7 @@ func (h *ServiceHttp) connectionLimitMiddleware() middleware.Middleware {
 						}
 						h.errorCounter.WithLabelValues(method, path, "connection_limit_exceeded").Inc()
 					}
-					return nil, fmt.Errorf("connection limit exceeded: max %d connections", h.maxConnections)
+					return nil, fmt.Errorf("concurrent request limit exceeded: max %d", h.maxConnections)
 				}
 			}
 

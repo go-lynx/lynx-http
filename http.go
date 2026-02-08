@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-kratos/kratos/v2/errors"
 	"github.com/go-kratos/kratos/v2/transport/http"
 	"github.com/go-lynx/lynx-http/conf"
 	"github.com/go-lynx/lynx/log"
@@ -81,7 +82,7 @@ type ServiceHttp struct {
 	// Circuit breaker instance
 	circuitBreaker *CircuitBreaker
 
-	// Connection limit semaphores (initialized once)
+	// Concurrent request limit semaphores (initialized once)
 	connectionSem chan struct{}
 	requestSem    chan struct{}
 	semInitOnce   sync.Once
@@ -108,6 +109,12 @@ type ServiceHttp struct {
 		lastError   error
 		retryWindow time.Duration // Avoid retrying failed checks within this window
 	}
+	// confMu protects conf pointer replacement in Configure; readers may read conf without lock (pointer read is atomic).
+	confMu sync.Mutex
+
+	// ErrorCodeMapper is an optional hook to map Kratos errors to a response "code" in the JSON body.
+	// When nil, the plugin uses Kratos se.Code or 500. Set by the application for business-specific codes.
+	ErrorCodeMapper func(se *errors.Error) int
 }
 
 // netHTTPToKratosHandlerAdapter adapts a net/http.Handler to a kratos http.HandlerFunc
@@ -217,32 +224,36 @@ func (h *ServiceHttp) setDefaultConfig() {
 
 // validateConfig validates configuration parameters.
 func (h *ServiceHttp) validateConfig() error {
-	// Validate address format
-	if h.conf.Addr != "" {
-		if !strings.Contains(h.conf.Addr, ":") {
-			return fmt.Errorf("invalid address format: %s", h.conf.Addr)
-		}
-		parts := strings.Split(h.conf.Addr, ":")
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid address format: %s", h.conf.Addr)
-		}
-		if port, err := strconv.Atoi(parts[1]); err != nil || port < 1 || port > 65535 {
-			return fmt.Errorf("invalid port number: %s", parts[1])
+	validNetworks := []string{"tcp", "tcp4", "tcp6", "unix", "unixpacket"}
+	networkValid := h.conf.Network == ""
+	for _, n := range validNetworks {
+		if h.conf.Network == n {
+			networkValid = true
+			break
 		}
 	}
+	if h.conf.Network != "" && !networkValid {
+		return fmt.Errorf("invalid network protocol: %s, valid options: %v", h.conf.Network, validNetworks)
+	}
 
-	// Validate network protocol
-	if h.conf.Network != "" {
-		validNetworks := []string{"tcp", "tcp4", "tcp6", "unix", "unixpacket"}
-		valid := false
-		for _, network := range validNetworks {
-			if h.conf.Network == network {
-				valid = true
-				break
+	// Validate address format: unix/unixpacket use path; tcp family use host:port
+	if h.conf.Addr != "" {
+		isUnix := h.conf.Network == "unix" || h.conf.Network == "unixpacket"
+		if isUnix {
+			if len(strings.TrimSpace(h.conf.Addr)) == 0 {
+				return fmt.Errorf("invalid unix address: path must be non-empty")
 			}
-		}
-		if !valid {
-			return fmt.Errorf("invalid network protocol: %s, valid options: %v", h.conf.Network, validNetworks)
+		} else {
+			if !strings.Contains(h.conf.Addr, ":") {
+				return fmt.Errorf("invalid address format (expect host:port): %s", h.conf.Addr)
+			}
+			parts := strings.Split(h.conf.Addr, ":")
+			if len(parts) != 2 {
+				return fmt.Errorf("invalid address format: %s", h.conf.Addr)
+			}
+			if port, err := strconv.Atoi(parts[1]); err != nil || port < 1 || port > 65535 {
+				return fmt.Errorf("invalid port number: %s", parts[1])
+			}
 		}
 	}
 
@@ -343,11 +354,26 @@ func (h *ServiceHttp) validateConfig() error {
 
 // initSecurityDefaults initializes security-related defaults.
 func (h *ServiceHttp) initSecurityDefaults() {
-	// Request size limit: 10MB
+	// Request size limit: 10MB or from config
 	h.maxRequestSize = 10 * 1024 * 1024
+	if h.conf.Security != nil && h.conf.Security.MaxRequestSize > 0 {
+		h.maxRequestSize = h.conf.Security.MaxRequestSize
+	}
 
-	// Rate limiting: 100 req/s, burst 200
-	h.rateLimiter = rate.NewLimiter(100, 200)
+	// Rate limiting: from conf.Security.RateLimit if present, else 100 req/s, burst 200
+	ratePerSec := 100
+	burst := 200
+	if h.conf.Security != nil && h.conf.Security.RateLimit != nil {
+		if h.conf.Security.RateLimit.Enabled {
+			if r := int(h.conf.Security.RateLimit.GetRatePerSecond()); r > 0 {
+				ratePerSec = r
+			}
+			if b := int(h.conf.Security.RateLimit.GetBurstLimit()); b > 0 {
+				burst = b
+			}
+		}
+	}
+	h.rateLimiter = rate.NewLimiter(rate.Limit(ratePerSec), burst)
 }
 
 // initRateLimiter initializes the rate limiter.
@@ -392,9 +418,14 @@ func (h *ServiceHttp) initPerformanceDefaults() {
 	h.writeBufferSize = int(h.conf.Performance.WriteBufferSize)
 }
 
-// initGracefulShutdownDefaults initializes graceful shutdown defaults.
+// initGracefulShutdownDefaults initializes graceful shutdown defaults from conf when present.
 func (h *ServiceHttp) initGracefulShutdownDefaults() {
 	h.shutdownTimeout = 30 * time.Second
+	if h.conf.GracefulShutdown != nil && h.conf.GracefulShutdown.ShutdownTimeout != nil {
+		if d := h.conf.GracefulShutdown.ShutdownTimeout.AsDuration(); d > 0 {
+			h.shutdownTimeout = d
+		}
+	}
 }
 
 // initMiddlewareDefaults initializes middleware defaults.
@@ -580,16 +611,13 @@ func (h *ServiceHttp) applyPerformanceConfig() {
 	log.Infof("Performance configurations applied successfully")
 }
 
-// applyConnectionLimits applies connection-related performance limits
+// applyConnectionLimits logs applied concurrent request and buffer limits (enforcement is in middleware).
 func (h *ServiceHttp) applyConnectionLimits() {
-	// Create a connection limiter middleware if max connections is configured
 	if h.maxConnections > 0 {
-		log.Infof("Connection limit middleware enabled: max %d connections", h.maxConnections)
+		log.Infof("Concurrent request limit enabled: max %d in-flight requests", h.maxConnections)
 	}
-
-	// Log concurrent request limits
 	if h.maxConcurrentRequests > 0 {
-		log.Infof("Concurrent request limit configured: max %d requests", h.maxConcurrentRequests)
+		log.Infof("Concurrent request limit (request semaphore): max %d", h.maxConcurrentRequests)
 	}
 
 	// Log buffer sizes
@@ -689,35 +717,40 @@ func (h *ServiceHttp) createShutdownContext() (context.Context, context.CancelFu
 
 // Configure updates the HTTP server configuration.
 // It accepts any type, attempts to cast it to *conf.Http, and updates the configuration on success.
+// Configure is concurrency-safe: the conf pointer swap is protected so concurrent request handlers never see a torn read.
 func (h *ServiceHttp) Configure(c any) error {
-	// Check for nil configuration
 	if c == nil {
 		return fmt.Errorf("configuration cannot be nil")
 	}
-
-	// Try to convert the provided configuration to *conf.Http
 	httpConf, ok := c.(*conf.Http)
 	if !ok {
 		return fmt.Errorf("invalid configuration type: expected *conf.Http, got %T", c)
 	}
 
-	// Save the old configuration for rollback
+	h.confMu.Lock()
+	defer h.confMu.Unlock()
+
 	oldConf := h.conf
 	h.conf = httpConf
-
-	// Set defaults
 	h.setDefaultConfig()
-
-	// Validate the new configuration
 	if err := h.validateConfig(); err != nil {
-		// Invalid configuration; roll back to the old one
 		h.conf = oldConf
 		log.Errorf("Invalid new configuration, rolling back: %v", err)
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
-
 	log.Infof("HTTP configuration updated successfully")
 	return nil
+}
+
+// GetServer returns the HTTP server instance for plugins.ServicePlugin compatibility.
+// May return nil if the plugin has not been started yet.
+func (h *ServiceHttp) GetServer() any {
+	return h.server
+}
+
+// GetServerType returns the service type identifier ("http").
+func (h *ServiceHttp) GetServerType() string {
+	return "http"
 }
 
 // RegisterMetricsGatherer allows injecting an external Prometheus registry into the unified /metrics aggregation.
