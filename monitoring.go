@@ -333,6 +333,7 @@ func (h *ServiceHttp) updateConnectionPoolMetricsOnce(poolName string) {
 }
 
 // healthCheckHandler returns the health check handler.
+// Marshal is done before WriteHeader to avoid calling WriteHeader twice on marshal failure.
 func (h *ServiceHttp) healthCheckHandler() nhttp.Handler {
 	return nhttp.HandlerFunc(func(w nhttp.ResponseWriter, r *nhttp.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -366,20 +367,16 @@ func (h *ServiceHttp) healthCheckHandler() nhttp.Handler {
 			}
 		}
 
-		// Serialize and write the response
+		// Marshal first so we only call WriteHeader once
+		data, marshalErr := json.Marshal(response)
+		if marshalErr != nil {
+			log.Errorf("Failed to marshal health check response: %v", marshalErr)
+			statusCode = nhttp.StatusInternalServerError
+			data = []byte(`{"error": "Failed to serialize response"}`)
+		}
 		w.WriteHeader(statusCode)
-		if data, err := json.Marshal(response); err == nil {
-			_, writeErr := w.Write(data)
-			if writeErr != nil {
-				return
-			}
-		} else {
-			log.Errorf("Failed to marshal health check response: %v", err)
-			w.WriteHeader(nhttp.StatusInternalServerError)
-			_, writeErr := w.Write([]byte(`{"error": "Failed to serialize response"}`))
-			if writeErr != nil {
-				return
-			}
+		if _, writeErr := w.Write(data); writeErr != nil {
+			return
 		}
 	})
 }

@@ -1,93 +1,25 @@
 // Package http implements the HTTP server plugin for the Lynx framework.
+// It is business-agnostic: no application-specific error codes or module names.
 package http
 
 import (
 	"encoding/json"
+	"net/http"
+
 	"github.com/go-kratos/kratos/v2/errors"
 	"github.com/go-lynx/lynx/log"
-	"net/http"
-	"strings"
 )
 
-// BusinessCodeMapper maps ErrorReason to business code based on module base
-// Module base codes:
-//   - 100000-199999: User module (betday-user)
-//   - 200000-299999: Game module (betday-game)
-//   - 300000-399999: Payment module (betday-pay)
-//   - 400000-499999: Base module (betday-base)
-//
-// Business code = module base + ErrorReason enum value
-func BusinessCodeMapper(reason string, moduleBase int) int {
-	// Common ErrorReason enum value mappings
-	// These are the standard enum values from error_reason.proto
-	errorReasonMap := map[string]int{
-		"USER_DOES_NOT_EXIST":       0,
-		"INCORRECT_PASSWORD":        1,
-		"ACCOUNT_HAS_BEEN_BANNED":   2,
-		"LOGIN_ERROR":               3,
-		"USER_ALREADY_EXISTS":       4,
-		"INVALID_VERIFICATION_CODE": 5,
-		"VERIFICATION_CODE_EXPIRED": 6,
-		"INVALID_TOKEN":             7,
-		"TOKEN_EXPIRED":             8,
-		"REGISTER_ERROR":            9,
-		"UPDATE_PROFILE_ERROR":      10,
-		"SEND_CODE_ERROR":           11,
+// defaultErrorCode returns a generic HTTP-style code from Kratos error (se.Code, or 500 if zero).
+// Used when no custom ErrorCodeMapper is set on ServiceHttp.
+func defaultErrorCode(se *errors.Error) int {
+	if se == nil {
+		return 500
 	}
-
-	// Extract ErrorReason from reason string (format: "layout.login.v1.ErrorReason_USER_DOES_NOT_EXIST" or "USER_DOES_NOT_EXIST")
-	reasonUpper := strings.ToUpper(reason)
-
-	// Try to find the ErrorReason enum name in the reason string
-	for enumName, enumValue := range errorReasonMap {
-		if strings.Contains(reasonUpper, enumName) {
-			return moduleBase + enumValue
-		}
+	if se.Code != 0 {
+		return int(se.Code)
 	}
-
-	// If not found in common mappings, try to extract enum value from reason string
-	// Reason format might be: "layout.login.v1.ErrorReason_USER_DOES_NOT_EXIST"
-	// or just "USER_DOES_NOT_EXIST"
-	parts := strings.Split(reasonUpper, "_")
-	if len(parts) > 0 {
-		// Try to find a numeric suffix or use hash-based mapping
-		// For unknown reasons, return a generic error code
-		return moduleBase + 999 // Generic error code for unknown reasons
-	}
-
-	// Default: return module base + 999 for unknown errors
-	return moduleBase + 999
-}
-
-// detectModuleBase detects the module base code from error reason
-// This is a fallback mechanism when module base is not explicitly configured
-// The reason string typically contains the package path, e.g., "layout.login.v1.ErrorReason_USER_DOES_NOT_EXIST"
-// We can infer the module from the package path or service context
-func detectModuleBase(reason string) int {
-	reasonLower := strings.ToLower(reason)
-
-	// Detect module from package path in reason string
-	// Common patterns:
-	// - "betday-user" or "user" in package path -> User module (100000)
-	// - "betday-game" or "game" in package path -> Game module (200000)
-	// - "betday-pay" or "pay" in package path -> Payment module (300000)
-	// - "betday-base" or "base" in package path -> Base module (400000)
-
-	// Check for explicit service name in reason
-	if strings.Contains(reasonLower, "betday-user") ||
-		(strings.Contains(reasonLower, "user") && !strings.Contains(reasonLower, "game") && !strings.Contains(reasonLower, "pay")) {
-		return 100000 // User module (100000-199999)
-	} else if strings.Contains(reasonLower, "betday-game") || strings.Contains(reasonLower, "game") {
-		return 200000 // Game module (200000-299999)
-	} else if strings.Contains(reasonLower, "betday-pay") || strings.Contains(reasonLower, "pay") || strings.Contains(reasonLower, "payment") {
-		return 300000 // Payment module (300000-399999)
-	} else if strings.Contains(reasonLower, "betday-base") || strings.Contains(reasonLower, "base") {
-		return 400000 // Base module (400000-499999)
-	}
-
-	// Default to user module if cannot detect
-	// This ensures backward compatibility
-	return 100000
+	return 500
 }
 
 // notFoundHandler returns a 404 handler.
@@ -160,52 +92,31 @@ func (h *ServiceHttp) methodNotAllowedHandler() http.Handler {
 	})
 }
 
-// enhancedErrorEncoder is an enhanced error encoder.
-// It returns business code in response body, not HTTP status code.
-// HTTP status code is set to 200 for all errors to avoid exposing error information.
+// enhancedErrorEncoder encodes errors to JSON with a numeric "code" in the body.
+// If ServiceHttp.ErrorCodeMapper is set, it is used; otherwise the default is Kratos se.Code or 500.
+// HTTP status is 200 by default to avoid leaking error details via status; applications may change this.
 func (h *ServiceHttp) enhancedErrorEncoder(w http.ResponseWriter, r *http.Request, err error) {
-	// Convert the error to a Kratos Error entity to extract the error reason
 	se := errors.FromError(err)
+	var code int
+	if h.ErrorCodeMapper != nil {
+		code = h.ErrorCodeMapper(se)
+	} else {
+		code = defaultErrorCode(se)
+	}
 
-	// Detect module base code from error reason or use default
-	moduleBase := detectModuleBase(se.Reason)
-
-	// Map ErrorReason to business code
-	businessCode := BusinessCodeMapper(se.Reason, moduleBase)
-
-	// Determine HTTP status code based on error type
-	// For security, we can return 200 for all errors, or use the original HTTP code
-	// Here we use 200 to avoid exposing error information in HTTP status
-	httpStatusCode := http.StatusOK
-
-	// Alternatively, you can use the original HTTP status code for proper HTTP semantics:
-	// if se.Code > 0 && se.Code >= 400 && se.Code < 600 {
-	//     httpStatusCode = int(se.Code)
-	// }
-
-	// Record error metrics
 	if h.errorCounter != nil {
 		h.errorCounter.WithLabelValues(r.Method, r.URL.Path, "server_error").Inc()
 	}
 
-	// Encode error response
-	// Only return business code, not message or error details, to avoid exposing sensitive information to frontend
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(httpStatusCode)
-	response := map[string]interface{}{
-		"code": businessCode,
-		// Error and message fields removed for security reasons
+	w.WriteHeader(http.StatusOK)
+	response := map[string]interface{}{"code": code}
+	data, marshalErr := json.Marshal(response)
+	if marshalErr != nil {
+		log.Errorf("Failed to encode error response: %v", marshalErr)
+		data = []byte(`{"code": 500}`)
 	}
-	if data, err := json.Marshal(response); err == nil {
-		_, writeErr := w.Write(data)
-		if writeErr != nil {
-			return
-		}
-	} else {
-		log.Errorf("Failed to encode error response: %v", err)
-		_, writeErr := w.Write([]byte(`{"code": 100999}`))
-		if writeErr != nil {
-			return
-		}
+	if _, writeErr := w.Write(data); writeErr != nil {
+		return
 	}
 }
