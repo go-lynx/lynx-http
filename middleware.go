@@ -23,6 +23,12 @@ import (
 func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 	var middlewares []middleware.Middleware
 
+	// Guard: conf must be loaded (e.g. after InitializeResources or valid Configure)
+	if h.conf == nil {
+		log.Warnf("buildMiddlewares called with nil conf, returning empty middleware chain")
+		return middlewares
+	}
+
 	// Create middleware configuration if not present
 	if h.conf.Middleware == nil {
 		h.conf.Middleware = &conf.MiddlewareConfig{
@@ -87,7 +93,13 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 
 	// Configure rate limit middleware using Lynx control plane HTTP rate limit policy
 	// If a rate limit middleware exists, append it
-	if rl := lynx.Lynx().GetControlPlane().HTTPRateLimit(); rl != nil && h.conf.Middleware.EnableRateLimit {
+	var rl middleware.Middleware
+	if app := lynx.Lynx(); app != nil {
+		if cp := app.GetControlPlane(); cp != nil {
+			rl = cp.HTTPRateLimit()
+		}
+	}
+	if rl != nil && h.conf != nil && h.conf.Middleware != nil && h.conf.Middleware.EnableRateLimit {
 		middlewares = append(middlewares, rl)
 		log.Infof("Control plane rate limit middleware enabled")
 	}
