@@ -264,6 +264,8 @@ func (h *ServiceHttp) CheckHealth() error {
 // This is used by the health check endpoint when the service is running.
 // It uses a cache to avoid frequent network dials when checks are successful,
 // but always performs a real check on failures to ensure immediate issue detection.
+// Note: Health check metrics (success/failure) are recorded by the HTTP handler that calls this,
+// to avoid double-counting when used from healthCheckHandler.
 func (h *ServiceHttp) CheckRuntimeHealth() error {
 	if h.server == nil {
 		return fmt.Errorf("HTTP server is not initialized")
@@ -276,11 +278,6 @@ func (h *ServiceHttp) CheckRuntimeHealth() error {
 		if err := h.checkPortAvailability(); err != nil {
 			return fmt.Errorf("HTTP server is not listening on %s: %w", h.conf.Addr, err)
 		}
-	}
-
-	// Record health check metrics
-	if h.healthCheckTotal != nil {
-		h.healthCheckTotal.WithLabelValues("success").Inc()
 	}
 
 	log.Debugf("HTTP service runtime health check passed")

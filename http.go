@@ -79,8 +79,9 @@ type ServiceHttp struct {
 	readBufferSize        int
 	writeBufferSize       int
 
-	// Circuit breaker instance
-	circuitBreaker *CircuitBreaker
+	// Circuit breaker instance (initialized once via circuitBreakerOnce)
+	circuitBreaker     *CircuitBreaker
+	circuitBreakerOnce sync.Once
 
 	// Concurrent request limit semaphores (initialized once)
 	connectionSem chan struct{}
@@ -244,16 +245,18 @@ func (h *ServiceHttp) validateConfig() error {
 				return fmt.Errorf("invalid unix address: path must be non-empty")
 			}
 		} else {
-			if !strings.Contains(h.conf.Addr, ":") {
-				return fmt.Errorf("invalid address format (expect host:port): %s", h.conf.Addr)
+			// Use net.SplitHostPort to support IPv4 and IPv6 (e.g. [::1]:8080)
+			host, port, err := net.SplitHostPort(h.conf.Addr)
+			if err != nil {
+				return fmt.Errorf("invalid address format: %w", err)
 			}
-			parts := strings.Split(h.conf.Addr, ":")
-			if len(parts) != 2 {
-				return fmt.Errorf("invalid address format: %s", h.conf.Addr)
+			if port == "" {
+				return fmt.Errorf("invalid address format (missing port): %s", h.conf.Addr)
 			}
-			if port, err := strconv.Atoi(parts[1]); err != nil || port < 1 || port > 65535 {
-				return fmt.Errorf("invalid port number: %s", parts[1])
+			if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+				return fmt.Errorf("invalid port number: %s", port)
 			}
+			_ = host // host may be empty for ":8080" or "[::]:8080"
 		}
 	}
 
@@ -590,19 +593,18 @@ func (h *ServiceHttp) applyPerformanceConfig() {
 			log.Infof("Configured MaxConnections: %d (enforced via accept limit/middleware)", h.conf.Performance.MaxConnections)
 		}
 		log.Infof("Performance optimizations applied to net/http.Server")
-		return
 	}
 
-	// Defaults fallback when no Performance config
-	if h.idleTimeout > 0 {
+	// Defaults fallback when no Performance config or some fields not set
+	if httpServer.IdleTimeout == 0 && h.idleTimeout > 0 {
 		httpServer.IdleTimeout = h.idleTimeout
 		log.Infof("Applied default IdleTimeout: %v", h.idleTimeout)
 	}
-	if h.keepAliveTimeout > 0 && httpServer.IdleTimeout == 0 {
+	if httpServer.IdleTimeout == 0 && h.keepAliveTimeout > 0 {
 		httpServer.IdleTimeout = h.keepAliveTimeout
 		log.Infof("Applied default KeepAliveTimeout using IdleTimeout: %v", h.keepAliveTimeout)
 	}
-	if h.readHeaderTimeout > 0 {
+	if httpServer.ReadHeaderTimeout == 0 && h.readHeaderTimeout > 0 {
 		httpServer.ReadHeaderTimeout = h.readHeaderTimeout
 		log.Infof("Applied default ReadHeaderTimeout: %v", h.readHeaderTimeout)
 	}

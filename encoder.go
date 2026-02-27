@@ -2,6 +2,7 @@
 package http
 
 import (
+	"encoding/json"
 	nhttp "net/http"
 
 	"github.com/go-kratos/kratos/v2/errors"
@@ -41,17 +42,27 @@ func ResponseEncoder(w http.ResponseWriter, r *http.Request, data interface{}) e
 		Message: "success",
 		Data:    data,
 	}
-	codec, _ := http.CodecForRequest(r, "Accept")
-	body, err := codec.Marshal(res)
-	if err != nil {
+	codec, ok := http.CodecForRequest(r, "Accept")
+	if !ok || codec == nil {
+		// Fallback to JSON when codec is unavailable or unsupported Accept
+		body, marshalErr := json.Marshal(res)
+		if marshalErr != nil {
+			w.WriteHeader(nhttp.StatusInternalServerError)
+			return marshalErr
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, wErr := w.Write(body)
+		return wErr
+	}
+	body, marshalErr := codec.Marshal(res)
+	if marshalErr != nil {
 		w.WriteHeader(nhttp.StatusInternalServerError)
-		return err
+		return marshalErr
 	}
 	// Write the JSON data to the HTTP response
-	_, err = w.Write(body)
-	if err != nil {
-		// Writing failed; return the error
-		return err
+	_, wErr := w.Write(body)
+	if wErr != nil {
+		return wErr
 	}
 	return nil
 }
@@ -64,19 +75,21 @@ func EncodeErrorFunc(w http.ResponseWriter, r *http.Request, err error) {
 	res := &Response{
 		Code: code,
 	}
-	codec, _ := http.CodecForRequest(r, "Accept")
-	body, err := codec.Marshal(res)
-	if err != nil {
+	codec, ok := http.CodecForRequest(r, "Accept")
+	if !ok || codec == nil {
+		body, _ := json.Marshal(res)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(nhttp.StatusOK)
+		_, _ = w.Write(body)
+		return
+	}
+	body, marshalErr := codec.Marshal(res)
+	if marshalErr != nil {
 		w.WriteHeader(nhttp.StatusOK)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	// For security, return 200 for all errors to avoid exposing error information in HTTP status
-	// Alternatively, you can use the original HTTP status code:
-	// httpStatusCode := nhttp.StatusInternalServerError
-	// if se.Code > 0 && se.Code >= 400 && se.Code < 600 {
-	//     httpStatusCode = int(se.Code)
-	// }
 	w.WriteHeader(nhttp.StatusOK)
 	_, wErr := w.Write(body)
 	if wErr != nil {

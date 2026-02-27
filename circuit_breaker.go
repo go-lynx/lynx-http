@@ -155,23 +155,27 @@ func (cb *CircuitBreaker) GetStats() (int32, int32, int32, CircuitBreakerState) 
 
 // circuitBreakerMiddleware creates a circuit breaker middleware for HTTP requests
 func (h *ServiceHttp) circuitBreakerMiddleware() middleware.Middleware {
-	// Skip if circuit breaker is disabled
-	if h.conf.CircuitBreaker == nil || !h.conf.CircuitBreaker.Enabled {
+	// Skip if circuit breaker is disabled or conf not loaded
+	if h.conf == nil || h.conf.CircuitBreaker == nil || !h.conf.CircuitBreaker.Enabled {
 		return func(handler middleware.Handler) middleware.Handler {
 			return handler
 		}
 	}
 
-	// Create circuit breaker with configuration if not already created
-	if h.circuitBreaker == nil {
+	// Create circuit breaker with configuration (once per plugin instance)
+	h.circuitBreakerOnce.Do(func() {
+		timeout := 60 * time.Second
+		if h.conf.CircuitBreaker.Timeout != nil {
+			timeout = h.conf.CircuitBreaker.Timeout.AsDuration()
+		}
 		config := CircuitBreakerConfig{
 			MaxFailures:      h.conf.CircuitBreaker.MaxFailures,
-			Timeout:          h.conf.CircuitBreaker.Timeout.AsDuration(),
+			Timeout:          timeout,
 			MaxRequests:      h.conf.CircuitBreaker.MaxRequests,
 			FailureThreshold: h.conf.CircuitBreaker.FailureThreshold,
 		}
 		h.circuitBreaker = NewCircuitBreaker(config)
-	}
+	})
 	cb := h.circuitBreaker
 
 	return func(handler middleware.Handler) middleware.Handler {
