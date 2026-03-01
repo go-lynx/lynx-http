@@ -26,18 +26,12 @@ func (h *ServiceHttp) tlsLoad() (http.ServerOption, error) {
 		return nil, fmt.Errorf("certificate provider not configured")
 	}
 
-	// Validate certificate provider has required data
+	// Validate certificate provider has required data at startup
 	if len(certProvider.GetCertificate()) == 0 {
 		return nil, fmt.Errorf("certificate data is empty")
 	}
 	if len(certProvider.GetPrivateKey()) == 0 {
 		return nil, fmt.Errorf("private key data is empty")
-	}
-
-	// Load certificate and private key
-	tlsCert, err := tls.X509KeyPair(certProvider.GetCertificate(), certProvider.GetPrivateKey())
-	if err != nil {
-		return nil, fmt.Errorf("failed to load X509 key pair: %w", err)
 	}
 
 	// Create certificate pool and add root CA
@@ -55,11 +49,22 @@ func (h *ServiceHttp) tlsLoad() (http.ServerOption, error) {
 		log.Warnf("No root CA certificate provided, client certificate verification will be disabled")
 	}
 
-	// Create TLS configuration
+	// Use GetCertificate callback for hot reload: file watch and auto rotation update certs without restart
 	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
-		ServerName:   lynx.GetName(),
-		ClientAuth:   tls.ClientAuthType(h.conf.GetTlsAuthType()),
+		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			certPEM := certProvider.GetCertificate()
+			keyPEM := certProvider.GetPrivateKey()
+			if len(certPEM) == 0 || len(keyPEM) == 0 {
+				return nil, fmt.Errorf("server certificate or private key not provided")
+			}
+			cert, err := tls.X509KeyPair(certPEM, keyPEM)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse X509 key pair: %w", err)
+			}
+			return &cert, nil
+		},
+		ServerName: lynx.GetName(),
+		ClientAuth: tls.ClientAuthType(h.conf.GetTlsAuthType()),
 	}
 
 	// Only set ClientCAs if we have a valid certificate pool
