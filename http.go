@@ -29,7 +29,7 @@ const (
 	pluginName = "http.server"
 
 	// pluginVersion indicates the current version of the HTTP server plugin.
-	pluginVersion = "v1.5.4"
+	pluginVersion = "v1.5.5"
 
 	// pluginDescription briefly describes the functionality of the HTTP server plugin.
 	pluginDescription = "http server plugin for lynx framework"
