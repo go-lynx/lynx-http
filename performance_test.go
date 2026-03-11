@@ -1,6 +1,7 @@
 package http
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -105,6 +106,42 @@ func TestPerformanceDefaults(t *testing.T) {
 	assert.Equal(t, 60*time.Second, service.idleTimeout)
 	assert.Equal(t, 30*time.Second, service.keepAliveTimeout)
 	assert.Equal(t, 20*time.Second, service.readHeaderTimeout)
+}
+
+func TestBuildMiddlewares_WithDefaultNewServiceHttp_DoesNotPanic(t *testing.T) {
+	service := NewServiceHttp()
+	service.conf = &conf.Http{}
+	service.initPerformanceDefaults()
+	service.initSecurityDefaults()
+
+	assert.NotPanics(t, func() {
+		middlewares := service.buildMiddlewares()
+		assert.NotNil(t, middlewares)
+	})
+}
+
+func TestBuildMiddlewares_ConcurrentDefaultConfig_DoesNotPanic(t *testing.T) {
+	service := NewServiceHttp()
+	service.conf = &conf.Http{}
+	service.initPerformanceDefaults()
+	service.initSecurityDefaults()
+
+	const goroutines = 8
+	const iterations = 100
+
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				assert.NotPanics(t, func() {
+					_ = service.buildMiddlewares()
+				})
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func TestSecurityDefaults(t *testing.T) {

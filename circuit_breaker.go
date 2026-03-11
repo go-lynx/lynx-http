@@ -45,6 +45,20 @@ type CircuitBreaker struct {
 	successes    int32
 	lastFailTime time.Time
 	mutex        sync.RWMutex
+
+	// windowRequests tracks total admitted requests in the current closed-state
+	// measurement window. Together with failures it computes the failure rate
+	// checked against FailureThreshold. The window auto-decays (halves) when it
+	// exceeds a cap derived from MaxFailures, so stale history does not
+	// permanently dilute the rate.
+	windowRequests int32
+}
+
+// RequestGuard captures whether a request was admitted by the circuit breaker.
+// It allows callers to record success/failure only for requests that were
+// actually counted by the breaker state machine.
+type RequestGuard struct {
+	allowed bool
 }
 
 // NewCircuitBreaker creates a new circuit breaker
@@ -69,73 +83,118 @@ func NewCircuitBreaker(config CircuitBreakerConfig) *CircuitBreaker {
 	}
 }
 
-// Allow checks if a request should be allowed through
-func (cb *CircuitBreaker) Allow() bool {
+// Allow checks if a request should be allowed through.
+// The returned guard records whether the request was admitted by the breaker
+// and therefore whether the caller should report success/failure back.
+func (cb *CircuitBreaker) Allow() RequestGuard {
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
 
 	switch cb.state {
 	case CircuitBreakerClosed:
-		return true
+		cb.windowRequests++
+		// Auto-decay: halve counters when the window exceeds a cap so that
+		// stale successes/failures don't permanently dilute the failure rate.
+		wCap := cb.config.MaxFailures * 4
+		if wCap < 20 {
+			wCap = 20
+		}
+		if wCap > 1000 {
+			wCap = 1000
+		}
+		if cb.windowRequests > wCap {
+			cb.windowRequests /= 2
+			cb.failures /= 2
+		}
+		return RequestGuard{allowed: true}
 	case CircuitBreakerOpen:
-		// Check if timeout has passed
+		// Check if timeout has passed.
 		if time.Since(cb.lastFailTime) > cb.config.Timeout {
 			cb.state = CircuitBreakerHalfOpen
 			cb.requests = 0
 			cb.successes = 0
+			cb.requests++ // admit and count the probe request immediately
 			log.Infof("Circuit breaker transitioning to half-open state")
-			return true
+			return RequestGuard{allowed: true}
 		}
-		return false
+		return RequestGuard{allowed: false}
 	case CircuitBreakerHalfOpen:
-		return cb.requests < cb.config.MaxRequests
+		if cb.requests >= cb.config.MaxRequests {
+			return RequestGuard{allowed: false}
+		}
+		cb.requests++
+		return RequestGuard{allowed: true}
 	default:
-		return false
+		return RequestGuard{allowed: false}
 	}
 }
 
-// RecordSuccess records a successful request
-func (cb *CircuitBreaker) RecordSuccess() {
+// Allowed reports whether the associated request was admitted by the breaker.
+func (g RequestGuard) Allowed() bool {
+	return g.allowed
+}
+
+// RecordSuccess records a successful admitted request.
+func (cb *CircuitBreaker) RecordSuccess(guard RequestGuard) {
+	if !guard.Allowed() {
+		return
+	}
+
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
 
 	cb.successes++
-	cb.requests++
 
 	if cb.state == CircuitBreakerHalfOpen {
-		// Check if we should close the circuit
 		if cb.successes >= cb.config.MaxRequests {
 			cb.state = CircuitBreakerClosed
 			cb.failures = 0
 			cb.requests = 0
 			cb.successes = 0
+			cb.windowRequests = 0
 			log.Infof("Circuit breaker closed - service recovered")
 		}
 	}
 }
 
-// RecordFailure records a failed request
-func (cb *CircuitBreaker) RecordFailure() {
+// RecordFailure records a failed admitted request.
+func (cb *CircuitBreaker) RecordFailure(guard RequestGuard) {
+	if !guard.Allowed() {
+		return
+	}
+
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
 
 	cb.failures++
-	cb.requests++
 	cb.lastFailTime = time.Now()
 
 	switch cb.state {
 	case CircuitBreakerClosed:
-		// Check if we should open the circuit
 		if cb.failures >= cb.config.MaxFailures {
-			cb.state = CircuitBreakerOpen
-			log.Warnf("Circuit breaker opened - too many failures (%d)", cb.failures)
+			shouldOpen := true
+			// When FailureThreshold is configured, also require the failure
+			// rate to exceed the threshold. This prevents opening on a small
+			// absolute number of failures scattered across many requests.
+			if cb.config.FailureThreshold > 0 && cb.windowRequests > 0 {
+				rate := float64(cb.failures) / float64(cb.windowRequests)
+				shouldOpen = rate >= cb.config.FailureThreshold
+			}
+			if shouldOpen {
+				var ratePct float64
+				if cb.windowRequests > 0 {
+					ratePct = float64(cb.failures) / float64(cb.windowRequests) * 100
+				}
+				cb.state = CircuitBreakerOpen
+				log.Warnf("Circuit breaker opened - failures: %d/%d requests (%.1f%% failure rate)",
+					cb.failures, cb.windowRequests, ratePct)
+			}
 		}
 	case CircuitBreakerHalfOpen:
-		// Return to open state
+		// Return to open state.
 		cb.state = CircuitBreakerOpen
 		log.Warnf("Circuit breaker returned to open state - failure in half-open")
 	default:
-
 	}
 }
 
@@ -151,6 +210,13 @@ func (cb *CircuitBreaker) GetStats() (int32, int32, int32, CircuitBreakerState) 
 	cb.mutex.RLock()
 	defer cb.mutex.RUnlock()
 	return cb.failures, cb.requests, cb.successes, cb.state
+}
+
+// GetWindowRequests returns the closed-state sliding window request count.
+func (cb *CircuitBreaker) GetWindowRequests() int32 {
+	cb.mutex.RLock()
+	defer cb.mutex.RUnlock()
+	return cb.windowRequests
 }
 
 // circuitBreakerMiddleware creates a circuit breaker middleware for HTTP requests
@@ -181,7 +247,8 @@ func (h *ServiceHttp) circuitBreakerMiddleware() middleware.Middleware {
 	return func(handler middleware.Handler) middleware.Handler {
 		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
 			// Check if request should be allowed
-			if !cb.Allow() {
+			guard := cb.Allow()
+			if !guard.Allowed() {
 				// Circuit is open, reject request
 				method := "unknown"
 				path := "unknown"
@@ -204,11 +271,11 @@ func (h *ServiceHttp) circuitBreakerMiddleware() middleware.Middleware {
 			// Execute the request
 			reply, err = handler(ctx, req)
 
-			// Record result
+			// Record result only for requests that were admitted by the breaker.
 			if err != nil {
-				cb.RecordFailure()
+				cb.RecordFailure(guard)
 			} else {
-				cb.RecordSuccess()
+				cb.RecordSuccess(guard)
 			}
 
 			return reply, err
@@ -227,10 +294,11 @@ func (h *ServiceHttp) GetCircuitBreakerStats() map[string]interface{} {
 	failures, requests, successes, state := h.circuitBreaker.GetStats()
 
 	return map[string]interface{}{
-		"enabled":   true,
-		"state":     state,
-		"failures":  failures,
-		"requests":  requests,
-		"successes": successes,
+		"enabled":         true,
+		"state":           state,
+		"failures":        failures,
+		"requests":        requests,
+		"successes":       successes,
+		"window_requests": h.circuitBreaker.GetWindowRequests(),
 	}
 }
