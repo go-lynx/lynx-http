@@ -23,15 +23,16 @@ import (
 func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 	var middlewares []middleware.Middleware
 
+	cfg := h.conf
 	// Guard: conf must be loaded (e.g. after InitializeResources or valid Configure)
-	if h.conf == nil {
+	if cfg == nil {
 		log.Warnf("buildMiddlewares called with nil conf, returning empty middleware chain")
 		return middlewares
 	}
 
-	// Create middleware configuration if not present
-	if h.conf.Middleware == nil {
-		h.conf.Middleware = &conf.MiddlewareConfig{
+	middlewareCfg := cfg.Middleware
+	if middlewareCfg == nil {
+		middlewareCfg = &conf.MiddlewareConfig{
 			EnableTracing:    true,
 			EnableLogging:    true,
 			EnableMetrics:    true,
@@ -41,42 +42,51 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 		}
 	}
 
+	monitoringCfg := cfg.Monitoring
+	if monitoringCfg == nil {
+		monitoringCfg = &conf.MonitoringConfig{
+			EnableMetrics: true,
+		}
+	}
+
 	// Base middlewares - order matters!
 	// Tracing middleware
-	if h.conf.Middleware.EnableTracing {
+	if middlewareCfg.EnableTracing {
 		middlewares = append(middlewares, tracing.Server(tracing.WithTracerName(lynx.GetName())))
 		log.Infof("Tracing middleware enabled")
 	}
 
 	// Logging middleware
-	if h.conf.Middleware.EnableLogging {
+	if middlewareCfg.EnableLogging {
 		middlewares = append(middlewares, logging.Server(log.Logger))
 		log.Infof("Logging middleware enabled")
 	}
 
 	// Metrics: use either standalone metricsMiddleware or TracerLogPackWithMetrics to avoid duplicate metrics
-	if h.conf.Middleware.EnableTracing && h.conf.Middleware.EnableLogging && h.conf.Middleware.EnableMetrics {
+	if middlewareCfg.EnableTracing && middlewareCfg.EnableLogging && middlewareCfg.EnableMetrics {
 		middlewares = append(middlewares, TracerLogPackWithMetrics(h))
 		log.Infof("TracerLogPackWithMetrics middleware enabled (tracing + logging + metrics)")
-	} else if h.conf.Middleware.EnableMetrics {
+	} else if middlewareCfg.EnableMetrics {
 		middlewares = append(middlewares, h.metricsMiddleware())
 		log.Infof("Metrics middleware enabled")
 	}
 
+	_ = monitoringCfg
+
 	// Request parameter validation middleware
-	if h.conf.Middleware.EnableValidation {
+	if middlewareCfg.EnableValidation {
 		middlewares = append(middlewares, validate.ProtoValidate())
 		log.Infof("Validation middleware enabled")
 	}
 
 	// Recovery middleware
-	if h.conf.Middleware.EnableRecovery {
+	if middlewareCfg.EnableRecovery {
 		middlewares = append(middlewares, h.recoveryMiddleware())
 		log.Infof("Recovery middleware enabled")
 	}
 
 	// Security-related middlewares
-	if h.conf.Middleware.EnableRateLimit {
+	if middlewareCfg.EnableRateLimit {
 		middlewares = append(middlewares, h.rateLimitMiddleware())
 		log.Infof("Rate limit middleware enabled")
 	}
@@ -99,7 +109,7 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 			rl = cp.HTTPRateLimit()
 		}
 	}
-	if rl != nil && h.conf != nil && h.conf.Middleware != nil && h.conf.Middleware.EnableRateLimit {
+	if rl != nil && middlewareCfg.EnableRateLimit {
 		middlewares = append(middlewares, rl)
 		log.Infof("Control plane rate limit middleware enabled")
 	}

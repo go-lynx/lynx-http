@@ -20,8 +20,12 @@ import (
 //   - http.ServerOption: A configured TLS option for the HTTP server
 //   - error: Any error that occurred during TLS configuration
 func (h *ServiceHttp) tlsLoad() (http.ServerOption, error) {
-	// Get the certificate provider
-	certProvider := lynx.Lynx().Certificate()
+	// Get the certificate provider from the global Lynx app if available.
+	app := lynx.Lynx()
+	if app == nil {
+		return nil, fmt.Errorf("lynx app not initialized")
+	}
+	certProvider := app.Certificate()
 	if certProvider == nil {
 		return nil, fmt.Errorf("certificate provider not configured")
 	}

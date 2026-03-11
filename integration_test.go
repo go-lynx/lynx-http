@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,10 +198,13 @@ func TestHTTPPluginTLS(t *testing.T) {
 
 	httpPlugin.conf = config
 
-	// Test TLS loading without certificate provider (should fail gracefully)
+	// Test TLS loading without a global Lynx app / certificate provider (should fail gracefully)
 	_, err := httpPlugin.tlsLoad()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "certificate provider not configured")
+	assert.True(t,
+		strings.Contains(err.Error(), "lynx app not initialized") || strings.Contains(err.Error(), "certificate provider not configured"),
+		"expected graceful TLS init failure, got: %v", err,
+	)
 }
 
 // TestHTTPPluginHealthCheck tests health check functionality
@@ -219,9 +223,10 @@ func TestHTTPPluginHealthCheck(t *testing.T) {
 	rr := &testResponseWriter{}
 	handler.ServeHTTP(rr, req)
 
-	// Verify response
-	assert.Equal(t, http.StatusOK, rr.statusCode)
+	// Verify response. Without an initialized server/runtime, runtime health check should report unavailable.
+	assert.Equal(t, http.StatusServiceUnavailable, rr.statusCode)
 	assert.Contains(t, rr.body, "status")
+	assert.Contains(t, rr.body, "unhealthy")
 }
 
 // testResponseWriter is a simple response writer for testing

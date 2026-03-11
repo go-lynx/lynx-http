@@ -357,6 +357,10 @@ func (h *ServiceHttp) validateConfig() error {
 
 // initSecurityDefaults initializes security-related defaults.
 func (h *ServiceHttp) initSecurityDefaults() {
+	if h.conf == nil {
+		h.conf = &conf.Http{}
+	}
+
 	// Request size limit: 10MB or from config
 	h.maxRequestSize = 10 * 1024 * 1024
 	if h.conf.Security != nil && h.conf.Security.MaxRequestSize > 0 {
@@ -393,6 +397,10 @@ func (h *ServiceHttp) initPerformanceDefaults() {
 	h.keepAliveTimeout = 30 * time.Second
 	h.readHeaderTimeout = 20 * time.Second
 
+	if h.conf == nil {
+		h.conf = &conf.Http{}
+	}
+
 	// Set performance defaults if not configured
 	if h.conf.Performance == nil {
 		h.conf.Performance = &conf.PerformanceConfig{}
@@ -423,6 +431,10 @@ func (h *ServiceHttp) initPerformanceDefaults() {
 
 // initGracefulShutdownDefaults initializes graceful shutdown defaults from conf when present.
 func (h *ServiceHttp) initGracefulShutdownDefaults() {
+	if h.conf == nil {
+		h.conf = &conf.Http{}
+	}
+
 	h.shutdownTimeout = 30 * time.Second
 	if h.conf.GracefulShutdown != nil && h.conf.GracefulShutdown.ShutdownTimeout != nil {
 		if d := h.conf.GracefulShutdown.ShutdownTimeout.AsDuration(); d > 0 {
@@ -433,6 +445,10 @@ func (h *ServiceHttp) initGracefulShutdownDefaults() {
 
 // initMiddlewareDefaults initializes middleware defaults.
 func (h *ServiceHttp) initMiddlewareDefaults() {
+	if h.conf == nil {
+		h.conf = &conf.Http{}
+	}
+
 	if h.conf.Middleware == nil {
 		h.conf.Middleware = &conf.MiddlewareConfig{
 			EnableTracing:    true,
@@ -447,6 +463,10 @@ func (h *ServiceHttp) initMiddlewareDefaults() {
 
 // initCircuitBreakerDefaults initializes circuit breaker defaults.
 func (h *ServiceHttp) initCircuitBreakerDefaults() {
+	if h.conf == nil {
+		h.conf = &conf.Http{}
+	}
+
 	if h.conf.CircuitBreaker == nil {
 		h.conf.CircuitBreaker = &conf.CircuitBreakerConfig{
 			Enabled:          true,
