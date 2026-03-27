@@ -58,7 +58,8 @@ func main() {
         },
     }
     
-    // Apply configuration
+    // Validate and store configuration.
+    // If the server is already running, transport-affecting changes apply on the next managed restart.
     err := httpPlugin.Configure(config)
     if err != nil {
         panic(err)
@@ -446,7 +447,9 @@ curl -v http://localhost:8080/health
 ### Plugin Methods
 
 - `NewServiceHttp()`: Create new HTTP plugin instance
-- `Configure(config)`: Apply configuration
+- `Configure(config)`: Validate and store configuration for the next start/restart
+- `StartContext(ctx, plugin)`: Start with lifecycle context support
+- `StopContext(ctx, plugin)`: Stop with lifecycle context support
 - `validateConfig()`: Validate configuration
 - `buildMiddlewares()`: Build middleware chain
 - `healthCheckHandler()`: Get health check handler
