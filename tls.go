@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/go-kratos/kratos/v2/transport/http"
-	"github.com/go-lynx/lynx"
 	"github.com/go-lynx/lynx/log"
 )
 
@@ -21,7 +20,7 @@ import (
 //   - error: Any error that occurred during TLS configuration
 func (h *ServiceHttp) tlsLoad() (http.ServerOption, error) {
 	// Get the certificate provider from the global Lynx app if available.
-	app := lynx.Lynx()
+	app := currentLynxApp()
 	if app == nil {
 		return nil, fmt.Errorf("lynx app not initialized")
 	}
@@ -67,7 +66,7 @@ func (h *ServiceHttp) tlsLoad() (http.ServerOption, error) {
 			}
 			return &cert, nil
 		},
-		ServerName: lynx.GetName(),
+		ServerName: currentLynxName(),
 		ClientAuth: tls.ClientAuthType(h.conf.GetTlsAuthType()),
 	}
 

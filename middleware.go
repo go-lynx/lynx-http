@@ -13,7 +13,6 @@ import (
 	"github.com/go-kratos/kratos/v2/middleware/recovery"
 	"github.com/go-kratos/kratos/v2/middleware/tracing"
 	"github.com/go-kratos/kratos/v2/transport"
-	"github.com/go-lynx/lynx"
 	"github.com/go-lynx/lynx-http/conf"
 	"github.com/go-lynx/lynx/log"
 	"google.golang.org/protobuf/proto"
@@ -52,7 +51,7 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 	// Base middlewares - order matters!
 	// Tracing middleware
 	if middlewareCfg.EnableTracing {
-		middlewares = append(middlewares, tracing.Server(tracing.WithTracerName(lynx.GetName())))
+		middlewares = append(middlewares, tracing.Server(tracing.WithTracerName(currentLynxName())))
 		log.Infof("Tracing middleware enabled")
 	}
 
@@ -104,7 +103,7 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 	// Configure rate limit middleware using Lynx control plane HTTP rate limit policy
 	// If a rate limit middleware exists, append it
 	var rl middleware.Middleware
-	if app := lynx.Lynx(); app != nil {
+	if app := currentLynxApp(); app != nil {
 		if cp := app.GetControlPlane(); cp != nil {
 			rl = cp.HTTPRateLimit()
 		}
