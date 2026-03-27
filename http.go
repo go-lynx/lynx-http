@@ -112,6 +112,7 @@ type ServiceHttp struct {
 	}
 	// confMu protects conf pointer replacement in Configure; readers may read conf without lock (pointer read is atomic).
 	confMu sync.Mutex
+	rt     plugins.Runtime
 
 	// ErrorCodeMapper is an optional hook to map Kratos errors to a response "code" in the JSON body.
 	// When nil, the plugin uses Kratos se.Code or 500. Set by the application for business-specific codes.
@@ -169,6 +170,7 @@ func NewServiceHttp() *ServiceHttp {
 // InitializeResources implements custom initialization logic for the HTTP plugin.
 // It loads and validates the HTTP server configuration, using defaults if not provided.
 func (h *ServiceHttp) InitializeResources(rt plugins.Runtime) error {
+	h.rt = rt
 	// Initialize an empty configuration struct
 	h.conf = &conf.Http{}
 
@@ -541,6 +543,17 @@ func (h *ServiceHttp) StartupTasks() error {
 
 	// Create the HTTP server instance
 	h.server = http.NewServer(opts...)
+
+	if h.rt != nil {
+		for _, resourceName := range []string{pluginName, "http"} {
+			if err := h.rt.RegisterSharedResource(resourceName, h.server); err != nil {
+				log.Warnf("failed to register http shared resource %s: %v", resourceName, err)
+			}
+		}
+		if err := h.rt.RegisterPrivateResource("server", h.server); err != nil {
+			log.Warnf("failed to register http private server resource: %v", err)
+		}
+	}
 
 	// Apply performance configuration to the underlying net/http.Server
 	h.applyPerformanceConfig()
