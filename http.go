@@ -170,6 +170,9 @@ func NewServiceHttp() *ServiceHttp {
 // InitializeResources implements custom initialization logic for the HTTP plugin.
 // It loads and validates the HTTP server configuration, using defaults if not provided.
 func (h *ServiceHttp) InitializeResources(rt plugins.Runtime) error {
+	if err := h.BasePlugin.InitializeResources(rt); err != nil {
+		return err
+	}
 	h.rt = rt
 	// Initialize an empty configuration struct
 	h.conf = &conf.Http{}
@@ -191,6 +194,13 @@ func (h *ServiceHttp) InitializeResources(rt plugins.Runtime) error {
 	log.Infof("HTTP configuration loaded: network=%s, addr=%s, tls=%v",
 		h.conf.Network, h.conf.Addr, h.conf.GetTlsEnable())
 	return nil
+}
+
+func (h *ServiceHttp) InitializeContext(ctx context.Context, plugin plugins.Plugin, rt plugins.Runtime) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context canceled before HTTP initialize: %w", err)
+	}
+	return h.BasePlugin.Initialize(plugin, rt)
 }
 
 // setDefaultConfig sets the default configuration values.
@@ -483,6 +493,17 @@ func (h *ServiceHttp) initCircuitBreakerDefaults() {
 // StartupTasks implements the custom startup logic for the HTTP plugin.
 // It configures and starts the HTTP server with necessary middleware and options.
 func (h *ServiceHttp) StartupTasks() error {
+	return h.startupWithContext(context.Background())
+}
+
+func (h *ServiceHttp) startupWithContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context canceled before HTTP startup: %w", err)
+	}
+	if h.conf == nil {
+		return fmt.Errorf("HTTP configuration not initialized")
+	}
+
 	// Log HTTP service startup
 	log.Infof("Starting HTTP service on %s", h.conf.Addr)
 
@@ -496,6 +517,9 @@ func (h *ServiceHttp) StartupTasks() error {
 	}()
 
 	// Initialize metrics (may start background goroutine)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("HTTP startup canceled before metrics initialization: %w", err)
+	}
 	h.initMetrics()
 	if h.metricsCancel != nil {
 		cleanup = h.metricsCancel
@@ -533,6 +557,9 @@ func (h *ServiceHttp) StartupTasks() error {
 		opts = append(opts, http.Timeout(h.conf.Timeout.AsDuration()))
 	}
 	if h.conf.GetTlsEnable() {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("HTTP startup canceled before TLS initialization: %w", err)
+		}
 		// If TLS is enabled, append TLS options
 		tlsOption, err := h.tlsLoad()
 		if err != nil {
@@ -542,6 +569,9 @@ func (h *ServiceHttp) StartupTasks() error {
 	}
 
 	// Create the HTTP server instance
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("HTTP startup canceled before server creation: %w", err)
+	}
 	h.server = http.NewServer(opts...)
 
 	if h.rt != nil {
@@ -553,6 +583,11 @@ func (h *ServiceHttp) StartupTasks() error {
 		if err := h.rt.RegisterPrivateResource("server", h.server); err != nil {
 			log.Warnf("failed to register http private server resource: %v", err)
 		}
+		if h.rateLimiter != nil {
+			if err := h.rt.RegisterPrivateResource("rate_limiter", h.rateLimiter); err != nil {
+				log.Warnf("failed to register http private rate limiter resource: %v", err)
+			}
+		}
 	}
 
 	// Apply performance configuration to the underlying net/http.Server
@@ -560,6 +595,20 @@ func (h *ServiceHttp) StartupTasks() error {
 
 	// Apply connection limits
 	h.applyConnectionLimits()
+	if h.rt != nil {
+		if h.circuitBreaker != nil {
+			if err := h.rt.RegisterPrivateResource("circuit_breaker", h.circuitBreaker); err != nil {
+				log.Warnf("failed to register http private circuit breaker resource: %v", err)
+			}
+		}
+		if h.metricsCancel != nil {
+			if err := h.rt.RegisterPrivateResource("metrics_state", map[string]any{
+				"monitoring_enabled": h.conf.Monitoring != nil && h.conf.Monitoring.EnableMetrics,
+			}); err != nil {
+				log.Warnf("failed to register http private metrics state resource: %v", err)
+			}
+		}
+	}
 
 	// Register monitoring endpoints
 	h.server.HandlePrefix("/metrics", metrics.Handler())
@@ -572,6 +621,10 @@ func (h *ServiceHttp) StartupTasks() error {
 	// Log successful startup
 	log.Infof("HTTP service successfully started with monitoring endpoints and performance optimizations")
 	return nil
+}
+
+func (h *ServiceHttp) StartContext(ctx context.Context, _ plugins.Plugin) error {
+	return h.startupWithContext(ctx)
 }
 
 // applyPerformanceConfig applies performance settings to the underlying HTTP server.
@@ -703,6 +756,10 @@ func (h *ServiceHttp) applyTCPBufferSettings(conn net.Conn) {
 // CleanupTasks implements custom cleanup logic for the HTTP plugin.
 // It gracefully stops the HTTP server and handles potential errors.
 func (h *ServiceHttp) CleanupTasks() error {
+	return h.cleanupWithContext(context.Background())
+}
+
+func (h *ServiceHttp) cleanupWithContext(parentCtx context.Context) error {
 	// If the server instance is nil, return immediately
 	if h.server == nil {
 		return nil
@@ -726,7 +783,7 @@ func (h *ServiceHttp) CleanupTasks() error {
 	}
 
 	// Configure shutdown timeout with proper context handling
-	ctx, cancel := h.createShutdownContext()
+	ctx, cancel := h.createShutdownContext(parentCtx)
 	defer cancel()
 
 	// Gracefully stop the server
@@ -740,14 +797,23 @@ func (h *ServiceHttp) CleanupTasks() error {
 }
 
 // createShutdownContext creates a context for graceful shutdown with appropriate timeout
-func (h *ServiceHttp) createShutdownContext() (context.Context, context.CancelFunc) {
+func (h *ServiceHttp) createShutdownContext(parentCtx context.Context) (context.Context, context.CancelFunc) {
 	// Use a parent context that can be cancelled if needed
-	parentCtx := context.Background()
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
 	if h.shutdownTimeout > 0 {
 		return context.WithTimeout(parentCtx, h.shutdownTimeout)
 	}
 	// Default timeout if not configured
 	return context.WithTimeout(parentCtx, 30*time.Second)
+}
+
+func (h *ServiceHttp) StopContext(ctx context.Context, _ plugins.Plugin) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("context canceled before HTTP stop: %w", err)
+	}
+	return h.cleanupWithContext(ctx)
 }
 
 // Configure updates the HTTP server configuration.
@@ -774,7 +840,21 @@ func (h *ServiceHttp) Configure(c any) error {
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
 	log.Infof("HTTP configuration updated successfully")
+	if h.server != nil {
+		log.Infof("HTTP configuration changes will apply on next managed restart")
+	}
 	return nil
+}
+
+func (h *ServiceHttp) PluginProtocol() plugins.PluginProtocol {
+	protocol := h.BasePlugin.PluginProtocol()
+	protocol.ContextLifecycle = true
+	protocol.ConfigValidation = true
+	return protocol
+}
+
+func (h *ServiceHttp) IsContextAware() bool {
+	return true
 }
 
 // GetServer returns the HTTP server instance for plugins.ServicePlugin compatibility.

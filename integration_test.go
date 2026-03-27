@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
@@ -11,6 +12,35 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
+
+func TestHTTPPluginProtocol(t *testing.T) {
+	httpPlugin := NewServiceHttp()
+	protocol := httpPlugin.PluginProtocol()
+	assert.True(t, protocol.ManagedLifecycle)
+	assert.True(t, protocol.HealthAware)
+	assert.True(t, protocol.ContextLifecycle)
+	assert.True(t, protocol.ConfigValidation)
+}
+
+func TestHTTPPluginStartContextCanceled(t *testing.T) {
+	httpPlugin := NewServiceHttp()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := httpPlugin.StartContext(ctx, httpPlugin)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "context canceled")
+}
+
+func TestHTTPPluginStopContextCanceled(t *testing.T) {
+	httpPlugin := NewServiceHttp()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := httpPlugin.StopContext(ctx, httpPlugin)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "context canceled")
+}
 
 // TestHTTPPluginIntegration tests the complete integration of the HTTP plugin
 func TestHTTPPluginIntegration(t *testing.T) {
