@@ -12,7 +12,6 @@ import (
 	"github.com/go-kratos/kratos/v2/middleware/logging"
 	"github.com/go-kratos/kratos/v2/middleware/recovery"
 	"github.com/go-kratos/kratos/v2/middleware/tracing"
-	"github.com/go-kratos/kratos/v2/transport"
 	"github.com/go-lynx/lynx-http/conf"
 	"github.com/go-lynx/lynx/log"
 	"google.golang.org/protobuf/proto"
@@ -41,13 +40,6 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 		}
 	}
 
-	monitoringCfg := cfg.Monitoring
-	if monitoringCfg == nil {
-		monitoringCfg = &conf.MonitoringConfig{
-			EnableMetrics: true,
-		}
-	}
-
 	// Base middlewares - order matters!
 	// Tracing middleware
 	if middlewareCfg.EnableTracing {
@@ -69,8 +61,6 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 		middlewares = append(middlewares, h.metricsMiddleware())
 		log.Infof("Metrics middleware enabled")
 	}
-
-	_ = monitoringCfg
 
 	// Request parameter validation middleware
 	if middlewareCfg.EnableValidation {
@@ -123,30 +113,21 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 // connectionLimitMiddleware returns a middleware that limits concurrent in-flight requests (and optionally a separate cap for connection-pool metrics).
 // Semaphores are initialized once and reused across all requests.
 func (h *ServiceHttp) connectionLimitMiddleware() middleware.Middleware {
-	h.semInitOnce.Do(func() {
-		if h.maxConnections > 0 {
-			h.connectionSem = make(chan struct{}, h.maxConnections)
-			log.Infof("Initialized concurrent request semaphore with capacity: %d", h.maxConnections)
-		}
-		if h.maxConcurrentRequests > 0 {
-			h.requestSem = make(chan struct{}, h.maxConcurrentRequests)
-			log.Infof("Initialized request semaphore with capacity: %d", h.maxConcurrentRequests)
-		}
-	})
-
 	return func(handler middleware.Handler) middleware.Handler {
 		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
+			h.ensureSemaphores()
+
 			// Apply concurrent request limit (maxConnections cap)
 			if h.connectionSem != nil {
 				select {
 				case h.connectionSem <- struct{}{}:
-					if h.maxConnections > 0 {
+					if h.maxConnections > 0 && h.connectionMetricsEnabled() {
 						newCount := atomic.AddInt32(&h.activeConnectionsCount, 1)
 						h.UpdateConnectionPoolUsage(newCount, int32(h.maxConnections))
 					}
 					defer func() {
 						<-h.connectionSem
-						if h.maxConnections > 0 {
+						if h.maxConnections > 0 && h.connectionMetricsEnabled() {
 							newCount := atomic.AddInt32(&h.activeConnectionsCount, -1)
 							if newCount < 0 {
 								atomic.StoreInt32(&h.activeConnectionsCount, 0)
@@ -157,18 +138,8 @@ func (h *ServiceHttp) connectionLimitMiddleware() middleware.Middleware {
 					}()
 				default:
 					// Concurrent request limit exceeded
-					if h.errorCounter != nil {
-						method := "unknown"
-						path := "unknown"
-						if tr, ok := transport.FromServerContext(ctx); ok {
-							method = tr.RequestHeader().Get("X-HTTP-Method")
-							if method == "" {
-								method = "POST"
-							}
-							path = tr.Operation()
-						}
-						h.errorCounter.WithLabelValues(method, path, "connection_limit_exceeded").Inc()
-					}
+					method, path := requestMetadata(ctx)
+					h.recordErrorMetric(method, path, "connection_limit_exceeded")
 					return nil, fmt.Errorf("concurrent request limit exceeded: max %d", h.maxConnections)
 				}
 			}
@@ -180,18 +151,8 @@ func (h *ServiceHttp) connectionLimitMiddleware() middleware.Middleware {
 					defer func() { <-h.requestSem }()
 				default:
 					// Request limit exceeded
-					if h.errorCounter != nil {
-						method := "unknown"
-						path := "unknown"
-						if tr, ok := transport.FromServerContext(ctx); ok {
-							method = tr.RequestHeader().Get("X-HTTP-Method")
-							if method == "" {
-								method = "POST"
-							}
-							path = tr.Operation()
-						}
-						h.errorCounter.WithLabelValues(method, path, "request_limit_exceeded").Inc()
-					}
+					method, path := requestMetadata(ctx)
+					h.recordErrorMetric(method, path, "request_limit_exceeded")
 					return nil, fmt.Errorf("concurrent request limit exceeded: max %d requests", h.maxConcurrentRequests)
 				}
 			}
@@ -208,18 +169,8 @@ func (h *ServiceHttp) recoveryMiddleware() middleware.Middleware {
 			log.ErrorCtx(ctx, "Panic recovered", "error", err)
 
 			// Record error metrics
-			if h.errorCounter != nil {
-				method := "POST"
-				path := "unknown"
-				if tr, ok := transport.FromServerContext(ctx); ok {
-					// Kratos HTTP transport commonly uses POST
-					if m := tr.RequestHeader().Get("X-HTTP-Method"); m != "" {
-						method = m
-					}
-					path = tr.Operation()
-				}
-				h.errorCounter.WithLabelValues(method, path, "panic").Inc()
-			}
+			method, path := requestMetadata(ctx)
+			h.recordErrorMetric(method, path, "panic")
 
 			return nil
 		}),
@@ -231,27 +182,17 @@ func (h *ServiceHttp) rateLimitMiddleware() middleware.Middleware {
 	return func(handler middleware.Handler) middleware.Handler {
 		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
 			// Get request information
-			method := "unknown"
-			path := "unknown"
-			if tr, ok := transport.FromServerContext(ctx); ok {
-				method = tr.RequestHeader().Get("X-HTTP-Method")
-				if method == "" {
-					method = "POST" // Kratos uses POST by default
-				}
-				path = tr.Operation()
-			}
+			method, path := requestMetadata(ctx)
 
 			// Increment request queue length
-			if h.requestQueueLength != nil {
+			if h.requestQueueLength != nil && h.queueMetricsEnabled() {
 				h.requestQueueLength.WithLabelValues(path).Inc()
 				defer h.requestQueueLength.WithLabelValues(path).Dec()
 			}
 
 			if h.rateLimiter != nil && !h.rateLimiter.Allow() {
 				// Record rate limit metrics
-				if h.errorCounter != nil {
-					h.errorCounter.WithLabelValues(method, path, "rate_limit_exceeded").Inc()
-				}
+				h.recordErrorMetric(method, path, "rate_limit_exceeded")
 				return nil, fmt.Errorf("rate limit exceeded")
 			}
 			return handler(ctx, req)
@@ -271,17 +212,11 @@ func (h *ServiceHttp) metricsMiddleware() middleware.Middleware {
 			route := "unknown"
 
 			// Use Kratos transport to get request information
-			if tr, ok := transport.FromServerContext(ctx); ok {
-				method = tr.RequestHeader().Get("X-HTTP-Method")
-				if method == "" {
-					method = "POST" // Kratos uses POST by default
-				}
-				path = tr.Operation() // Operation path
-				route = path          // Use operation path as route for now
-			}
+			method, path = requestMetadata(ctx)
+			route = path
 
 			// Increment active connections
-			if h.activeConnections != nil {
+			if h.activeConnections != nil && h.connectionMetricsEnabled() {
 				h.activeConnections.WithLabelValues(h.conf.Addr).Inc()
 				defer h.activeConnections.WithLabelValues(h.conf.Addr).Dec()
 			}
@@ -321,11 +256,11 @@ func (h *ServiceHttp) metricsMiddleware() middleware.Middleware {
 			}
 
 			// Record route metrics
-			if h.routeRequestDuration != nil {
+			if h.routeRequestDuration != nil && h.routeMetricsEnabled() {
 				h.routeRequestDuration.WithLabelValues(route, method).Observe(duration)
 			}
 
-			if h.routeRequestCounter != nil {
+			if h.routeRequestCounter != nil && h.routeMetricsEnabled() {
 				status := "success"
 				if err != nil {
 					status = "error"

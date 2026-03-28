@@ -383,13 +383,15 @@ func (h *ServiceHttp) initSecurityDefaults() {
 	ratePerSec := 100
 	burst := 200
 	if h.conf.Security != nil && h.conf.Security.RateLimit != nil {
-		if h.conf.Security.RateLimit.Enabled {
-			if r := int(h.conf.Security.RateLimit.GetRatePerSecond()); r > 0 {
-				ratePerSec = r
-			}
-			if b := int(h.conf.Security.RateLimit.GetBurstLimit()); b > 0 {
-				burst = b
-			}
+		if !h.conf.Security.RateLimit.Enabled {
+			h.rateLimiter = nil
+			return
+		}
+		if r := int(h.conf.Security.RateLimit.GetRatePerSecond()); r > 0 {
+			ratePerSec = r
+		}
+		if b := int(h.conf.Security.RateLimit.GetBurstLimit()); b > 0 {
+			burst = b
 		}
 	}
 	h.rateLimiter = rate.NewLimiter(rate.Limit(ratePerSec), burst)
@@ -595,6 +597,7 @@ func (h *ServiceHttp) startupWithContext(ctx context.Context) error {
 
 	// Apply connection limits
 	h.applyConnectionLimits()
+	h.ensureCircuitBreaker()
 	if h.rt != nil {
 		if h.circuitBreaker != nil {
 			if err := h.rt.RegisterPrivateResource("circuit_breaker", h.circuitBreaker); err != nil {
@@ -611,9 +614,11 @@ func (h *ServiceHttp) startupWithContext(ctx context.Context) error {
 	}
 
 	// Register monitoring endpoints
-	h.server.HandlePrefix("/metrics", metrics.Handler())
+	if h.metricsEndpointEnabled() {
+		h.server.HandlePrefix(h.metricsPath(), metrics.Handler())
+	}
 	// Adapt net/http.Handler to kratos http.HandlerFunc
-	h.server.HandlePrefix("/health", &netHTTPToKratosHandlerAdapter{handler: h.healthCheckHandler()})
+	h.server.HandlePrefix(h.healthPath(), &netHTTPToKratosHandlerAdapter{handler: h.healthCheckHandler()})
 
 	// Success - clear cleanup function
 	cleanup = nil
@@ -839,9 +844,16 @@ func (h *ServiceHttp) Configure(c any) error {
 		log.Errorf("Invalid new configuration, rolling back: %v", err)
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
+	h.connectionSem = nil
+	h.requestSem = nil
+	h.circuitBreaker = nil
+	resetOnce(&h.semInitOnce)
+	resetOnce(&h.circuitBreakerOnce)
 	log.Infof("HTTP configuration updated successfully")
 	if h.server != nil {
-		log.Infof("HTTP configuration changes will apply on next managed restart")
+		h.applyPerformanceConfig()
+		h.reconfigureMetricsLoop()
+		log.Infof("HTTP configuration changes were applied to dynamic runtime state; route and middleware wiring changes still require managed restart")
 	}
 	return nil
 }

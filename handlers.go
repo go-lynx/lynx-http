@@ -22,6 +22,13 @@ func defaultErrorCode(se *errors.Error) int {
 	return 500
 }
 
+func defaultHTTPStatus(code int) int {
+	if code >= 400 && code <= 599 {
+		return code
+	}
+	return http.StatusInternalServerError
+}
+
 // notFoundHandler returns a 404 handler.
 func (h *ServiceHttp) notFoundHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -49,9 +56,7 @@ func (h *ServiceHttp) notFoundHandler() http.Handler {
 		}
 
 		// Record 404 errors
-		if h.errorCounter != nil {
-			h.errorCounter.WithLabelValues(r.Method, r.URL.Path, "not_found").Inc()
-		}
+		h.recordErrorMetric(r.Method, r.URL.Path, "not_found")
 
 		log.Warnf("404 not found: %s %s", r.Method, r.URL.Path)
 	})
@@ -84,9 +89,7 @@ func (h *ServiceHttp) methodNotAllowedHandler() http.Handler {
 		}
 
 		// Record 405 errors
-		if h.errorCounter != nil {
-			h.errorCounter.WithLabelValues(r.Method, r.URL.Path, "method_not_allowed").Inc()
-		}
+		h.recordErrorMetric(r.Method, r.URL.Path, "method_not_allowed")
 
 		log.Warnf("405 method not allowed: %s %s", r.Method, r.URL.Path)
 	})
@@ -104,12 +107,10 @@ func (h *ServiceHttp) enhancedErrorEncoder(w http.ResponseWriter, r *http.Reques
 		code = defaultErrorCode(se)
 	}
 
-	if h.errorCounter != nil {
-		h.errorCounter.WithLabelValues(r.Method, r.URL.Path, "server_error").Inc()
-	}
+	h.recordErrorMetric(r.Method, r.URL.Path, "server_error")
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(defaultHTTPStatus(code))
 	response := map[string]interface{}{"code": code}
 	data, marshalErr := json.Marshal(response)
 	if marshalErr != nil {

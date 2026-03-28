@@ -20,29 +20,26 @@ import (
 
 // initMonitoringDefaults initializes monitoring defaults.
 func (h *ServiceHttp) initMonitoringDefaults() {
-	// Set default monitoring configuration if not provided
 	if h.conf.Monitoring == nil {
-		h.conf.Monitoring = &conf.MonitoringConfig{}
+		h.conf.Monitoring = &conf.MonitoringConfig{
+			EnableMetrics:           true,
+			EnableRequestLogging:    true,
+			EnableErrorLogging:      true,
+			EnableRouteMetrics:      true,
+			EnableConnectionMetrics: true,
+			EnableQueueMetrics:      true,
+			EnableErrorTypeMetrics:  true,
+			MetricsPath:             defaultMetricsPath,
+			HealthPath:              defaultHealthPath,
+		}
+		return
 	}
 
-	// Enable metrics by default
-	if !h.conf.Monitoring.EnableMetrics {
-		h.conf.Monitoring.EnableMetrics = true
+	if strings.TrimSpace(h.conf.Monitoring.MetricsPath) == "" {
+		h.conf.Monitoring.MetricsPath = defaultMetricsPath
 	}
-
-	// Enable connection metrics by default
-	if !h.conf.Monitoring.EnableConnectionMetrics {
-		h.conf.Monitoring.EnableConnectionMetrics = true
-	}
-
-	// Enable queue metrics by default
-	if !h.conf.Monitoring.EnableQueueMetrics {
-		h.conf.Monitoring.EnableQueueMetrics = true
-	}
-
-	// Enable route metrics by default
-	if !h.conf.Monitoring.EnableRouteMetrics {
-		h.conf.Monitoring.EnableRouteMetrics = true
+	if strings.TrimSpace(h.conf.Monitoring.HealthPath) == "" {
+		h.conf.Monitoring.HealthPath = defaultHealthPath
 	}
 }
 
@@ -228,13 +225,7 @@ func (h *ServiceHttp) initMetrics() {
 	h.routeRequestCounter = httpRouteRequestCounter
 	h.routeRequestDuration = httpRouteRequestDuration
 
-	// Initialize real connection pool metrics if enabled
-	if h.conf.Monitoring != nil && h.conf.Monitoring.EnableConnectionMetrics {
-		// Create context for metrics goroutine
-		h.metricsCtx, h.metricsCancel = context.WithCancel(context.Background())
-		// Initialize connection pool metrics with real values
-		go h.updateConnectionPoolMetrics(h.metricsCtx)
-	}
+	h.reconfigureMetricsLoop()
 }
 
 // CheckHealth performs a comprehensive health check for the HTTP server.
@@ -318,6 +309,9 @@ func (h *ServiceHttp) updateConnectionPoolMetricsOnce(poolName string) {
 
 	// Calculate real connection pool usage based on configuration
 	// Note: Prometheus Set() operations don't return errors, so we don't need error handling here
+	if !h.connectionMetricsEnabled() {
+		return
+	}
 	if h.maxConnections > 0 {
 		current := atomic.LoadInt32(&h.activeConnectionsCount)
 		usage := clampUsage(float64(current) / float64(h.maxConnections))
@@ -380,7 +374,7 @@ func (h *ServiceHttp) healthCheckHandler() nhttp.Handler {
 
 // UpdateConnectionPoolUsage updates the connection pool usage metric
 func (h *ServiceHttp) UpdateConnectionPoolUsage(activeConnections, maxConnections int32) {
-	if h.connectionPoolUsage != nil && maxConnections > 0 {
+	if h.connectionPoolUsage != nil && h.connectionMetricsEnabled() && maxConnections > 0 {
 		usage := clampUsage(float64(activeConnections) / float64(maxConnections))
 		h.connectionPoolUsage.WithLabelValues("http-server-pool").Set(usage)
 	}

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/go-kratos/kratos/v2/middleware"
-	"github.com/go-kratos/kratos/v2/transport"
 	"github.com/go-lynx/lynx/log"
 )
 
@@ -221,49 +220,21 @@ func (cb *CircuitBreaker) GetWindowRequests() int32 {
 
 // circuitBreakerMiddleware creates a circuit breaker middleware for HTTP requests
 func (h *ServiceHttp) circuitBreakerMiddleware() middleware.Middleware {
-	// Skip if circuit breaker is disabled or conf not loaded
-	if h.conf == nil || h.conf.CircuitBreaker == nil || !h.conf.CircuitBreaker.Enabled {
-		return func(handler middleware.Handler) middleware.Handler {
-			return handler
-		}
-	}
-
-	// Create circuit breaker with configuration (once per plugin instance)
-	h.circuitBreakerOnce.Do(func() {
-		timeout := 60 * time.Second
-		if h.conf.CircuitBreaker.Timeout != nil {
-			timeout = h.conf.CircuitBreaker.Timeout.AsDuration()
-		}
-		config := CircuitBreakerConfig{
-			MaxFailures:      h.conf.CircuitBreaker.MaxFailures,
-			Timeout:          timeout,
-			MaxRequests:      h.conf.CircuitBreaker.MaxRequests,
-			FailureThreshold: h.conf.CircuitBreaker.FailureThreshold,
-		}
-		h.circuitBreaker = NewCircuitBreaker(config)
-	})
-	cb := h.circuitBreaker
-
 	return func(handler middleware.Handler) middleware.Handler {
 		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
+			cb := h.ensureCircuitBreaker()
+			if cb == nil {
+				return handler(ctx, req)
+			}
+
 			// Check if request should be allowed
 			guard := cb.Allow()
 			if !guard.Allowed() {
 				// Circuit is open, reject request
-				method := "unknown"
-				path := "unknown"
-				if tr, ok := transport.FromServerContext(ctx); ok {
-					method = tr.RequestHeader().Get("X-HTTP-Method")
-					if method == "" {
-						method = "POST"
-					}
-					path = tr.Operation()
-				}
+				method, path := requestMetadata(ctx)
 
 				// Record circuit breaker rejection
-				if h.errorCounter != nil {
-					h.errorCounter.WithLabelValues(method, path, "circuit_breaker_open").Inc()
-				}
+				h.recordErrorMetric(method, path, "circuit_breaker_open")
 
 				return nil, fmt.Errorf("circuit breaker is open - service unavailable")
 			}
