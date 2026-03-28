@@ -1,14 +1,18 @@
 package http
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-kratos/kratos/v2/errors"
 	"github.com/go-lynx/lynx-http/conf"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
@@ -33,16 +37,15 @@ func TestPerformanceConfig(t *testing.T) {
 func TestMonitoringMetrics(t *testing.T) {
 	// Create an HTTP plugin instance
 	service := &ServiceHttp{}
-	service.conf = &conf.Http{
-		Monitoring: &conf.MonitoringConfig{},
-	}
+	service.conf = &conf.Http{}
 
 	// Initialize monitoring defaults
 	service.initMonitoringDefaults()
 
 	// Verify monitoring configuration defaults
 	assert.True(t, service.conf.Monitoring.EnableMetrics)
-	// Note: Other monitoring flags are not defined in the proto and are removed
+	assert.Equal(t, defaultMetricsPath, service.conf.Monitoring.MetricsPath)
+	assert.Equal(t, defaultHealthPath, service.conf.Monitoring.HealthPath)
 
 	// Initialize metrics
 	service.initMetrics()
@@ -156,6 +159,97 @@ func TestSecurityDefaults(t *testing.T) {
 	assert.NotNil(t, service.rateLimiter)
 	assert.Equal(t, rate.Limit(100), service.rateLimiter.Limit()) // 100 req/s
 	assert.Equal(t, 200, service.rateLimiter.Burst())             // burst: 200
+}
+
+func TestMonitoringDefaultsRespectExplicitValues(t *testing.T) {
+	service := NewServiceHttp()
+	service.conf = &conf.Http{
+		Monitoring: &conf.MonitoringConfig{
+			EnableMetrics:           false,
+			EnableRequestLogging:    false,
+			EnableErrorLogging:      false,
+			EnableRouteMetrics:      false,
+			EnableConnectionMetrics: false,
+			EnableQueueMetrics:      false,
+			EnableErrorTypeMetrics:  false,
+			MetricsPath:             "/internal/metrics",
+			HealthPath:              "/internal/health",
+		},
+	}
+
+	service.initMonitoringDefaults()
+
+	assert.False(t, service.conf.Monitoring.EnableMetrics)
+	assert.False(t, service.conf.Monitoring.EnableRequestLogging)
+	assert.False(t, service.conf.Monitoring.EnableErrorLogging)
+	assert.False(t, service.conf.Monitoring.EnableRouteMetrics)
+	assert.False(t, service.conf.Monitoring.EnableConnectionMetrics)
+	assert.False(t, service.conf.Monitoring.EnableQueueMetrics)
+	assert.False(t, service.conf.Monitoring.EnableErrorTypeMetrics)
+	assert.Equal(t, "/internal/metrics", service.metricsPath())
+	assert.Equal(t, "/internal/health", service.healthPath())
+}
+
+func TestEnhancedErrorEncoderUsesHTTPStatus(t *testing.T) {
+	service := NewServiceHttp()
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	rec := httptest.NewRecorder()
+
+	service.enhancedErrorEncoder(rec, req, errors.NotFound("test", "missing"))
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.JSONEq(t, `{"code":404}`, rec.Body.String())
+}
+
+func TestConfigureResetsDynamicRuntimeState(t *testing.T) {
+	service := NewServiceHttp()
+	service.conf = &conf.Http{
+		Network: "tcp",
+		Addr:    ":8080",
+		Performance: &conf.PerformanceConfig{
+			MaxConnections:        2,
+			MaxConcurrentRequests: 1,
+		},
+		CircuitBreaker: &conf.CircuitBreakerConfig{
+			Enabled:          true,
+			MaxFailures:      1,
+			MaxRequests:      1,
+			FailureThreshold: 1,
+			Timeout:          durationpb.New(time.Second),
+		},
+	}
+	service.setDefaultConfig()
+
+	service.ensureSemaphores()
+	firstCB := service.ensureCircuitBreaker()
+	require.NotNil(t, firstCB)
+	require.Equal(t, 2, cap(service.connectionSem))
+	require.Equal(t, 1, cap(service.requestSem))
+
+	err := service.Configure(&conf.Http{
+		Network: "tcp",
+		Addr:    ":8081",
+		Performance: &conf.PerformanceConfig{
+			MaxConnections:        4,
+			MaxConcurrentRequests: 3,
+		},
+		CircuitBreaker: &conf.CircuitBreakerConfig{
+			Enabled:          true,
+			MaxFailures:      5,
+			MaxRequests:      2,
+			FailureThreshold: 0.5,
+			Timeout:          durationpb.New(2 * time.Second),
+		},
+	})
+	require.NoError(t, err)
+
+	service.ensureSemaphores()
+	secondCB := service.ensureCircuitBreaker()
+	require.NotNil(t, secondCB)
+	assert.NotSame(t, firstCB, secondCB)
+	assert.Equal(t, 4, cap(service.connectionSem))
+	assert.Equal(t, 3, cap(service.requestSem))
+	assert.Equal(t, int32(5), secondCB.config.MaxFailures)
 }
 
 func TestGracefulShutdownDefaults(t *testing.T) {

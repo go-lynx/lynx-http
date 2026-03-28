@@ -10,12 +10,10 @@ import (
 	"github.com/go-lynx/lynx/log"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
 const (
-	maxBodySize     = 1024 * 1024 // 1MB
 	contentTypeKey  = "Content-Type"
 	jsonContentType = "application/json"
 	traceIDNone     = "none"
@@ -72,18 +70,6 @@ func getClientIP(header transport.Header) string {
 	return "unknown"
 }
 
-// safeProtoToJSON safely marshals a proto message to JSON.
-func safeProtoToJSON(msg proto.Message) (string, error) {
-	body, err := protojson.Marshal(msg)
-	if err != nil {
-		return "", err
-	}
-	if len(body) > maxBodySize {
-		return fmt.Sprintf("<body too large, size: %d bytes>", len(body)), nil
-	}
-	return string(body), nil
-}
-
 // TracerLogPack returns middleware that adds trace IDs and Content-Type headers to the response.
 // It extracts trace from context (or from request headers like W3C traceparent if not yet in context) and sets "Trace-Id" and "Span-Id" in response headers. Invalid/empty span is returned as "none".
 func TracerLogPack() middleware.Middleware {
@@ -120,51 +106,20 @@ func TracerLogPack() middleware.Middleware {
 			}()
 
 			// Log the request
-			var reqBody string
-			if msg, ok := req.(proto.Message); ok {
-				if body, jsonErr := safeProtoToJSON(msg); jsonErr == nil {
-					reqBody = body
-				} else {
-					reqBody = fmt.Sprintf("<failed to marshal request: %v>", jsonErr)
-				}
-			} else {
-				reqBody = fmt.Sprintf("%#v", req)
+			if requestLoggingEnabled(nil) {
+				headersStr := fmt.Sprintf("%#v", sanitizeHeaders(tr.RequestHeader()))
+				log.InfofCtx(ctx, httpRequestLogFormat, api, endpoint, clientIP, headersStr, summarizePayload(req))
 			}
-
-			// Collect all request headers
-			headers := make(map[string]string)
-			for _, key := range tr.RequestHeader().Keys() {
-				headers[key] = tr.RequestHeader().Get(key)
-			}
-			headersStr := fmt.Sprintf("%#v", headers)
-
-			// Log with Info level for production monitoring
-			log.InfofCtx(ctx, httpRequestLogFormat, api, endpoint, clientIP, headersStr, reqBody)
 
 			reply, err = handler(ctx, req)
 
-			var respBody string
-			if msg, ok := reply.(proto.Message); ok {
-				if body, jsonErr := safeProtoToJSON(msg); jsonErr == nil {
-					respBody = body
-				} else {
-					respBody = fmt.Sprintf("<failed to marshal response: %v>", jsonErr)
-				}
-			} else {
-				respBody = fmt.Sprintf("%#v", reply)
-			}
-
-			respHeaders := make(map[string]string)
-			for _, key := range tr.ReplyHeader().Keys() {
-				respHeaders[key] = tr.ReplyHeader().Get(key)
-			}
-			respHeadersStr := fmt.Sprintf("%#v", respHeaders)
-
 			duration := time.Since(start)
-			if err != nil {
+			respHeadersStr := fmt.Sprintf("%#v", sanitizeHeaders(tr.ReplyHeader()))
+			respBody := summarizePayload(reply)
+			if err != nil && errorLoggingEnabled(nil) {
 				log.ErrorfCtx(ctx, httpResponseLogFormat,
 					api, endpoint, duration, err, respHeadersStr, respBody)
-			} else {
+			} else if requestLoggingEnabled(nil) {
 				log.InfofCtx(ctx, httpResponseLogFormat,
 					api, endpoint, duration, err, respHeadersStr, respBody)
 			}
@@ -198,6 +153,7 @@ func TracerLogPackWithMetrics(service *ServiceHttp) middleware.Middleware {
 			endpoint := tr.Endpoint()
 			clientIP := getClientIP(tr.RequestHeader())
 			api := tr.Operation()
+			method, metricPath := requestMetadata(ctx)
 
 			defer func() {
 				header := tr.ReplyHeader()
@@ -208,24 +164,10 @@ func TracerLogPackWithMetrics(service *ServiceHttp) middleware.Middleware {
 				}
 			}()
 
-			var reqBody string
-			if msg, ok := req.(proto.Message); ok {
-				if body, jsonErr := safeProtoToJSON(msg); jsonErr == nil {
-					reqBody = body
-				} else {
-					reqBody = fmt.Sprintf("<failed to marshal request: %v>", jsonErr)
-				}
-			} else {
-				reqBody = fmt.Sprintf("%#v", req)
+			if service.requestLoggingEnabled() {
+				headersStr := fmt.Sprintf("%#v", sanitizeHeaders(tr.RequestHeader()))
+				log.InfofCtx(ctx, httpRequestLogFormat, api, endpoint, clientIP, headersStr, summarizePayload(req))
 			}
-
-			headers := make(map[string]string)
-			for _, key := range tr.RequestHeader().Keys() {
-				headers[key] = tr.RequestHeader().Get(key)
-			}
-			headersStr := fmt.Sprintf("%#v", headers)
-
-			log.InfofCtx(ctx, httpRequestLogFormat, api, endpoint, clientIP, headersStr, reqBody)
 
 			// Inflight counter and request size metrics
 			if service != nil && service.inflightRequests != nil {
@@ -236,7 +178,7 @@ func TracerLogPackWithMetrics(service *ServiceHttp) middleware.Middleware {
 			if service != nil && service.requestSize != nil {
 				if msg, ok := req.(proto.Message); ok {
 					if data, e := proto.Marshal(msg); e == nil {
-						service.requestSize.WithLabelValues("POST", api).Observe(float64(len(data)))
+						service.requestSize.WithLabelValues(method, metricPath).Observe(float64(len(data)))
 					}
 				}
 			}
@@ -244,31 +186,14 @@ func TracerLogPackWithMetrics(service *ServiceHttp) middleware.Middleware {
 			// Handle the request
 			reply, err = handler(ctx, req)
 
-			// Log the response
-			var respBody string
-			if msg, ok := reply.(proto.Message); ok {
-				if body, jsonErr := safeProtoToJSON(msg); jsonErr == nil {
-					respBody = body
-				} else {
-					respBody = fmt.Sprintf("<failed to marshal response: %v>", jsonErr)
-				}
-			} else {
-				respBody = fmt.Sprintf("%#v", reply)
-			}
-
-			// Collect all response headers
-			respHeaders := make(map[string]string)
-			for _, key := range tr.ReplyHeader().Keys() {
-				respHeaders[key] = tr.ReplyHeader().Get(key)
-			}
-			respHeadersStr := fmt.Sprintf("%#v", respHeaders)
-
 			// Choose log level based on presence of error
 			duration := time.Since(start)
-			if err != nil {
+			respHeadersStr := fmt.Sprintf("%#v", sanitizeHeaders(tr.ReplyHeader()))
+			respBody := summarizePayload(reply)
+			if err != nil && service.errorLoggingEnabled() {
 				log.ErrorfCtx(ctx, httpResponseLogFormat,
 					api, endpoint, duration, err, respHeadersStr, respBody)
-			} else {
+			} else if service.requestLoggingEnabled() {
 				log.InfofCtx(ctx, httpResponseLogFormat,
 					api, endpoint, duration, err, respHeadersStr, respBody)
 			}
@@ -277,7 +202,7 @@ func TracerLogPackWithMetrics(service *ServiceHttp) middleware.Middleware {
 			if service != nil {
 				// Record request duration
 				if service.requestDuration != nil {
-					service.requestDuration.WithLabelValues("POST", api).Observe(duration.Seconds())
+					service.requestDuration.WithLabelValues(method, metricPath).Observe(duration.Seconds())
 				}
 
 				// Record request count
@@ -286,21 +211,21 @@ func TracerLogPackWithMetrics(service *ServiceHttp) middleware.Middleware {
 					if err != nil {
 						status = "error"
 					}
-					service.requestCounter.WithLabelValues("POST", api, status).Inc()
+					service.requestCounter.WithLabelValues(method, metricPath, status).Inc()
 				}
 
 				// Record response size
 				if service.responseSize != nil && reply != nil {
 					if msg, ok := reply.(proto.Message); ok {
 						if data, marshalErr := proto.Marshal(msg); marshalErr == nil {
-							service.responseSize.WithLabelValues("POST", api).Observe(float64(len(data)))
+							service.responseSize.WithLabelValues(method, metricPath).Observe(float64(len(data)))
 						}
 					}
 				}
 
 				// Record errors
-				if err != nil && service.errorCounter != nil {
-					service.errorCounter.WithLabelValues("POST", api, "tracer_error").Inc()
+				if err != nil {
+					service.recordErrorMetric(method, metricPath, "tracer_error")
 				}
 			}
 
