@@ -117,8 +117,16 @@ func TracerLogPack() middleware.Middleware {
 			respHeadersStr := fmt.Sprintf("%#v", sanitizeHeaders(tr.ReplyHeader()))
 			respBody := summarizePayload(reply)
 			if err != nil && errorLoggingEnabled(nil) {
-				log.ErrorfCtx(ctx, httpResponseLogFormat,
-					api, endpoint, duration, err, respHeadersStr, respBody)
+				keyvals := []any{
+					"msg", "[HTTP Response]",
+					"api", api,
+					"endpoint", endpoint,
+					"duration", duration,
+					"headers", respHeadersStr,
+					"body", respBody,
+				}
+				keyvals = append(keyvals, errorLogFields(err)...)
+				log.ErrorwCtx(ctx, keyvals...)
 			} else if requestLoggingEnabled(nil) {
 				log.InfofCtx(ctx, httpResponseLogFormat,
 					api, endpoint, duration, err, respHeadersStr, respBody)
@@ -191,8 +199,16 @@ func TracerLogPackWithMetrics(service *ServiceHttp) middleware.Middleware {
 			respHeadersStr := fmt.Sprintf("%#v", sanitizeHeaders(tr.ReplyHeader()))
 			respBody := summarizePayload(reply)
 			if err != nil && service.errorLoggingEnabled() {
-				log.ErrorfCtx(ctx, httpResponseLogFormat,
-					api, endpoint, duration, err, respHeadersStr, respBody)
+				keyvals := []any{
+					"msg", "[HTTP Response]",
+					"api", api,
+					"endpoint", endpoint,
+					"duration", duration,
+					"headers", respHeadersStr,
+					"body", respBody,
+				}
+				keyvals = append(keyvals, errorLogFields(err)...)
+				log.ErrorwCtx(ctx, keyvals...)
 			} else if service.requestLoggingEnabled() {
 				log.InfofCtx(ctx, httpResponseLogFormat,
 					api, endpoint, duration, err, respHeadersStr, respBody)

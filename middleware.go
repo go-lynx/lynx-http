@@ -9,7 +9,6 @@ import (
 
 	"github.com/go-kratos/kratos/contrib/middleware/validate/v2"
 	"github.com/go-kratos/kratos/v2/middleware"
-	"github.com/go-kratos/kratos/v2/middleware/logging"
 	"github.com/go-kratos/kratos/v2/middleware/recovery"
 	"github.com/go-kratos/kratos/v2/middleware/tracing"
 	"github.com/go-lynx/lynx-http/conf"
@@ -49,7 +48,7 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 
 	// Logging middleware
 	if middlewareCfg.EnableLogging {
-		middlewares = append(middlewares, logging.Server(log.Logger))
+		middlewares = append(middlewares, h.loggingMiddleware())
 		log.Infof("Logging middleware enabled")
 	}
 

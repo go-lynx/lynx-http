@@ -541,7 +541,7 @@ func (h *ServiceHttp) startupWithContext(ctx context.Context) error {
 		http.NotFoundHandler(h.notFoundHandler()),
 		// 405 Method Not Allowed handler
 		http.MethodNotAllowedHandler(h.methodNotAllowedHandler()),
-		// Unified response format { "code", "data" }: success code=0, error uses ErrorCodeMapper or 500
+		// 成功 { "code":200, "data":... }；错误仅 { "code":... }（无 data），业务码见 ErrorCodeMapper
 		http.ResponseEncoder(ResponseEncoder),
 		http.ErrorEncoder(h.enhancedErrorEncoder),
 	}
