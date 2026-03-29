@@ -316,7 +316,6 @@ func (h *ServiceHttp) updateConnectionPoolMetricsOnce(poolName string) {
 		current := atomic.LoadInt32(&h.activeConnectionsCount)
 		usage := clampUsage(float64(current) / float64(h.maxConnections))
 		h.connectionPoolUsage.WithLabelValues(poolName).Set(usage)
-		log.Debugf("Connection pool metrics updated for pool: %s (current=%d, max=%d)", poolName, current, h.maxConnections)
 	} else {
 		// No connection limit configured, set to 0
 		h.connectionPoolUsage.WithLabelValues(poolName).Set(0)

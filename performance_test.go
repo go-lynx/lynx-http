@@ -197,8 +197,39 @@ func TestEnhancedErrorEncoderUsesHTTPStatus(t *testing.T) {
 
 	service.enhancedErrorEncoder(rec, req, errors.NotFound("test", "missing"))
 
-	assert.Equal(t, http.StatusNotFound, rec.Code)
+	// 无 ErrorCodeMapper 时 body 为 Kratos 语义码，HTTP 仍为 200（仅 code==500 时 HTTP 500）
+	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.JSONEq(t, `{"code":404}`, rec.Body.String())
+}
+
+// 配置 ErrorCodeMapper 时：业务码走 HTTP 200；仅映射为 500 时 HTTP 500。
+func TestEnhancedErrorEncoderBodyUsesBusinessCodeFromMapper(t *testing.T) {
+	service := NewServiceHttp()
+	service.ErrorCodeMapper = func(se *errors.Error) int {
+		if se != nil && se.Reason == "INCORRECT_PASSWORD" {
+			return 100004
+		}
+		return 500
+	}
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", nil)
+	rec := httptest.NewRecorder()
+
+	service.enhancedErrorEncoder(rec, req, errors.BadRequest("INCORRECT_PASSWORD", ""))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"code":100004}`, rec.Body.String())
+}
+
+func TestEnhancedErrorEncoderSystemFailureHTTP500(t *testing.T) {
+	service := NewServiceHttp()
+	service.ErrorCodeMapper = func(se *errors.Error) int {
+		return 500
+	}
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	rec := httptest.NewRecorder()
+	service.enhancedErrorEncoder(rec, req, errors.BadRequest("UNKNOWN", ""))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.JSONEq(t, `{"code":500}`, rec.Body.String())
 }
 
 func TestConfigureResetsDynamicRuntimeState(t *testing.T) {

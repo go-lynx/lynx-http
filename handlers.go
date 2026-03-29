@@ -22,11 +22,16 @@ func defaultErrorCode(se *errors.Error) int {
 	return 500
 }
 
-func defaultHTTPStatus(code int) int {
-	if code >= 400 && code <= 599 {
-		return code
+// BodyCodeSystemFailure 与业务约定：响应 JSON 中 code==500 表示系统/未识别错误，对应 HTTP 500；其余 code 一律 HTTP 200。
+const BodyCodeSystemFailure = 500
+
+// responseBodyCodeFromError 与 enhancedErrorEncoder 共用：决定写入 body 的 code 数字（供熔断器等同源判断）。
+func (h *ServiceHttp) responseBodyCodeFromError(err error) int {
+	se := errors.FromError(err)
+	if h.ErrorCodeMapper != nil {
+		return h.ErrorCodeMapper(se)
 	}
-	return http.StatusInternalServerError
+	return defaultErrorCode(se)
 }
 
 // notFoundHandler returns a 404 handler.
@@ -95,23 +100,26 @@ func (h *ServiceHttp) methodNotAllowedHandler() http.Handler {
 	})
 }
 
-// enhancedErrorEncoder encodes errors to JSON with a numeric "code" in the body.
-// If ServiceHttp.ErrorCodeMapper is set, it is used; otherwise the default is Kratos se.Code or 500.
-// HTTP status is 200 by default to avoid leaking error details via status; applications may change this.
+// enhancedErrorEncoder 将错误编码为 JSON：body 仅含 {"code":…}。
+// 约定：除「系统/未识别」外 HTTP 恒为 200，由 body.code 表达业务（如 100004）；仅当 body.code==BodyCodeSystemFailure(500) 时 HTTP 为 500。
+// 这样网关/熔断器不会因业务失败把服务判死；未配置 ErrorCodeMapper 时沿用 defaultErrorCode（多为 Kratos 语义码写入 body，HTTP 仍按上述规则）。
 func (h *ServiceHttp) enhancedErrorEncoder(w http.ResponseWriter, r *http.Request, err error) {
-	se := errors.FromError(err)
-	var code int
-	if h.ErrorCodeMapper != nil {
-		code = h.ErrorCodeMapper(se)
-	} else {
-		code = defaultErrorCode(se)
+	bodyCode := h.responseBodyCodeFromError(err)
+
+	httpStatus := http.StatusOK
+	if bodyCode == BodyCodeSystemFailure {
+		httpStatus = http.StatusInternalServerError
 	}
 
-	h.recordErrorMetric(r.Method, r.URL.Path, "server_error")
+	kind := "business_error"
+	if bodyCode == BodyCodeSystemFailure {
+		kind = "server_error"
+	}
+	h.recordErrorMetric(r.Method, r.URL.Path, kind)
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(defaultHTTPStatus(code))
-	response := map[string]interface{}{"code": code, "data": nil}
+	w.WriteHeader(httpStatus)
+	response := map[string]interface{}{"code": bodyCode}
 	data, marshalErr := json.Marshal(response)
 	if marshalErr != nil {
 		log.Errorf("Failed to encode error response: %v", marshalErr)

@@ -4,10 +4,12 @@ package http
 import (
 	"encoding/json"
 	nhttp "net/http"
+	"reflect"
 
 	"github.com/go-kratos/kratos/v2/errors"
 	"github.com/go-kratos/kratos/v2/transport/http"
 	"github.com/go-lynx/lynx/log"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/runtime/protoimpl"
 )
 
@@ -29,17 +31,40 @@ type Response struct {
 	Data interface{} `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
 }
 
+// shouldOmitSuccessData 为 true 时不输出 data 字段（例如 LogoutReply 等空 proto、nil、空 map/slice）。
+func shouldOmitSuccessData(data interface{}) bool {
+	if data == nil {
+		return true
+	}
+	if pm, ok := data.(proto.Message); ok {
+		return proto.Size(pm) == 0
+	}
+	rv := reflect.ValueOf(data)
+	switch rv.Kind() {
+	case reflect.Ptr:
+		if rv.IsNil() {
+			return true
+		}
+		return shouldOmitSuccessData(rv.Elem().Interface())
+	case reflect.Map, reflect.Slice, reflect.Array:
+		return rv.Len() == 0
+	default:
+		return false
+	}
+}
+
 // ResponseEncoder encodes response data into a standardized JSON format.
-// It wraps the data in a Response struct with code=0 and empty message for unified { "code", "data" } format.
+// 成功时 code=200；无载荷时不输出 data 字段（避免出现 "data":{}）。
 // w is the HTTP response writer used to send the response to the client.
 // r is the HTTP request object (currently unused).
 // data is the response payload to encode.
 // Returns an error if encoding fails.
 func ResponseEncoder(w http.ResponseWriter, r *http.Request, data interface{}) error {
-	// Create a standardized response structure (code 0 = success; message omitempty so JSON is { "code", "data" })
 	res := &Response{
-		Code: 0,
-		Data: data,
+		Code: 200,
+	}
+	if !shouldOmitSuccessData(data) {
+		res.Data = data
 	}
 	codec, ok := http.CodecForRequest(r, "Accept")
 	if !ok || codec == nil {

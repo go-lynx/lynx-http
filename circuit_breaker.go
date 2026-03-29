@@ -242,9 +242,11 @@ func (h *ServiceHttp) circuitBreakerMiddleware() middleware.Middleware {
 			// Execute the request
 			reply, err = handler(ctx, req)
 
-			// Record result only for requests that were admitted by the breaker.
+			// 与 enhancedErrorEncoder 对齐：仅 body.code==500（系统/未识别）计为服务故障；业务码走 HTTP 200，不得触发熔断。
 			if err != nil {
-				cb.RecordFailure(guard)
+				if h.responseBodyCodeFromError(err) == BodyCodeSystemFailure {
+					cb.RecordFailure(guard)
+				}
 			} else {
 				cb.RecordSuccess(guard)
 			}
