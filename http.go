@@ -541,7 +541,8 @@ func (h *ServiceHttp) startupWithContext(ctx context.Context) error {
 		http.NotFoundHandler(h.notFoundHandler()),
 		// 405 Method Not Allowed handler
 		http.MethodNotAllowedHandler(h.methodNotAllowedHandler()),
-		// Response encoder
+		// Unified response format { "code", "data" }: success code=0, error uses ErrorCodeMapper or 500
+		http.ResponseEncoder(ResponseEncoder),
 		http.ErrorEncoder(h.enhancedErrorEncoder),
 	}
 
@@ -861,7 +862,6 @@ func (h *ServiceHttp) Configure(c any) error {
 func (h *ServiceHttp) PluginProtocol() plugins.PluginProtocol {
 	protocol := h.BasePlugin.PluginProtocol()
 	protocol.ContextLifecycle = true
-	protocol.ConfigValidation = true
 	return protocol
 }
 
