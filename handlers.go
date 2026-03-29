@@ -111,7 +111,7 @@ func (h *ServiceHttp) enhancedErrorEncoder(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(defaultHTTPStatus(code))
-	response := map[string]interface{}{"code": code}
+	response := map[string]interface{}{"code": code, "data": nil}
 	data, marshalErr := json.Marshal(response)
 	if marshalErr != nil {
 		log.Errorf("Failed to encode error response: %v", marshalErr)

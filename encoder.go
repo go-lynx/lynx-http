@@ -30,17 +30,16 @@ type Response struct {
 }
 
 // ResponseEncoder encodes response data into a standardized JSON format.
-// It wraps the data in a Response struct with code=200 and message="success".
+// It wraps the data in a Response struct with code=0 and empty message for unified { "code", "data" } format.
 // w is the HTTP response writer used to send the response to the client.
 // r is the HTTP request object (currently unused).
 // data is the response payload to encode.
 // Returns an error if encoding fails.
 func ResponseEncoder(w http.ResponseWriter, r *http.Request, data interface{}) error {
-	// Create a standardized response structure
+	// Create a standardized response structure (code 0 = success; message omitempty so JSON is { "code", "data" })
 	res := &Response{
-		Code:    200,
-		Message: "success",
-		Data:    data,
+		Code: 0,
+		Data: data,
 	}
 	codec, ok := http.CodecForRequest(r, "Accept")
 	if !ok || codec == nil {
