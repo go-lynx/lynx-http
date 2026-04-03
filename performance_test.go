@@ -190,6 +190,30 @@ func TestMonitoringDefaultsRespectExplicitValues(t *testing.T) {
 	assert.Equal(t, "/internal/health", service.healthPath())
 }
 
+func TestMonitoringAccessorsCloneConfigBeforeApplyingDefaults(t *testing.T) {
+	service := NewServiceHttp()
+	service.conf = &conf.Http{
+		Monitoring: &conf.MonitoringConfig{
+			EnableMetrics:        true,
+			EnableRequestLogging: false,
+			EnableErrorLogging:   false,
+		},
+	}
+
+	cfg := service.monitoringConfigOrDefault()
+
+	require.NotNil(t, cfg)
+	require.NotSame(t, service.conf.Monitoring, cfg)
+	assert.False(t, service.requestLoggingEnabled())
+	assert.False(t, service.errorLoggingEnabled())
+	assert.Equal(t, defaultMetricsPath, cfg.MetricsPath)
+	assert.Equal(t, defaultHealthPath, cfg.HealthPath)
+	assert.Equal(t, defaultMetricsPath, service.metricsPath())
+	assert.Equal(t, defaultHealthPath, service.healthPath())
+	assert.Empty(t, service.conf.Monitoring.MetricsPath)
+	assert.Empty(t, service.conf.Monitoring.HealthPath)
+}
+
 func TestEnhancedErrorEncoderUsesHTTPStatus(t *testing.T) {
 	service := NewServiceHttp()
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
