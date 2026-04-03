@@ -58,14 +58,17 @@ func (h *ServiceHttp) monitoringConfigOrDefault() *conf.MonitoringConfig {
 			HealthPath:              defaultHealthPath,
 		}
 	}
-	cfg := *h.conf.Monitoring
+	cfg, ok := proto.Clone(h.conf.Monitoring).(*conf.MonitoringConfig)
+	if !ok || cfg == nil {
+		cfg = &conf.MonitoringConfig{}
+	}
 	if strings.TrimSpace(cfg.MetricsPath) == "" {
 		cfg.MetricsPath = defaultMetricsPath
 	}
 	if strings.TrimSpace(cfg.HealthPath) == "" {
 		cfg.HealthPath = defaultHealthPath
 	}
-	return &cfg
+	return cfg
 }
 
 func (h *ServiceHttp) requestLoggingEnabled() bool {
@@ -221,8 +224,46 @@ func (h *ServiceHttp) reconfigureMetricsLoop() {
 	}
 
 	if h.connectionPoolUsage != nil && h.connectionMetricsEnabled() {
-		h.metricsCtx, h.metricsCancel = context.WithCancel(context.Background())
+		parentCtx := h.metricsRootCtx
+		if parentCtx == nil {
+			parentCtx = context.Background()
+		}
+		h.metricsCtx, h.metricsCancel = context.WithCancel(parentCtx)
 		go h.updateConnectionPoolMetrics(h.metricsCtx)
+	}
+}
+
+func (h *ServiceHttp) setMetricsLifecycleContext(ctx context.Context) {
+	if h == nil {
+		return
+	}
+
+	if h.metricsRootCancel != nil {
+		h.metricsRootCancel()
+		h.metricsRootCancel = nil
+		h.metricsRootCtx = nil
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	h.metricsRootCtx, h.metricsRootCancel = context.WithCancel(context.WithoutCancel(ctx))
+}
+
+func (h *ServiceHttp) stopMetricsLoop() {
+	if h == nil {
+		return
+	}
+
+	if h.metricsCancel != nil {
+		h.metricsCancel()
+		h.metricsCancel = nil
+		h.metricsCtx = nil
+	}
+	if h.metricsRootCancel != nil {
+		h.metricsRootCancel()
+		h.metricsRootCancel = nil
+		h.metricsRootCtx = nil
 	}
 }
 

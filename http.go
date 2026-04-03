@@ -100,8 +100,10 @@ type ServiceHttp struct {
 	// Shutdown timeout
 	shutdownTimeout time.Duration
 	// Context for stopping background goroutines
-	metricsCtx    context.Context
-	metricsCancel context.CancelFunc
+	metricsRootCtx    context.Context
+	metricsRootCancel context.CancelFunc
+	metricsCtx        context.Context
+	metricsCancel     context.CancelFunc
 	// Port availability check cache to avoid frequent retries on failures
 	// Note: We only cache failures, never successes, to ensure real-time detection
 	portCheckCache struct {
@@ -522,9 +524,10 @@ func (h *ServiceHttp) startupWithContext(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("HTTP startup canceled before metrics initialization: %w", err)
 	}
+	h.setMetricsLifecycleContext(ctx)
 	h.initMetrics()
 	if h.metricsCancel != nil {
-		cleanup = h.metricsCancel
+		cleanup = h.stopMetricsLoop
 	}
 
 	// Initialize rate limiter
@@ -784,9 +787,7 @@ func (h *ServiceHttp) cleanupWithContext(parentCtx context.Context) error {
 	})
 
 	// Stop background metrics goroutine
-	if h.metricsCancel != nil {
-		h.metricsCancel()
-	}
+	h.stopMetricsLoop()
 
 	// Configure shutdown timeout with proper context handling
 	ctx, cancel := h.createShutdownContext(parentCtx)
