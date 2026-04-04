@@ -29,6 +29,7 @@ lynx:
       max_request_size: 10485760      # Request size limit (10MB)
       
       # CORS configuration
+      # Reserved for future middleware wiring; current runtime does not enforce it automatically.
       cors:
         enabled: false                # Enable CORS
         allowed_origins: ["*"]        # Allowed origins
@@ -45,6 +46,7 @@ lynx:
         burst_limit: 200              # Burst allowance
       
       # Security headers
+      # Reserved for future response middleware; current runtime does not emit these headers automatically.
       security_headers:
         enabled: false                # Enable security headers
         content_security_policy: "default-src 'self'"  # CSP header
@@ -60,6 +62,7 @@ lynx:
       write_buffer_size: 4096         # Write buffer size (4KB)
       
       # Connection pool configuration
+      # Reserved for monitoring metadata only; current runtime does not create an outbound pool from these fields.
       connection_pool:
         max_idle_conns: 100           # Maximum idle connections
         max_idle_conns_per_host: 10   # Maximum idle connections per host
@@ -89,8 +92,8 @@ lynx:
     # Graceful shutdown configuration
     graceful_shutdown:
       shutdown_timeout: "30s"         # Shutdown timeout
-      wait_for_ongoing_requests: true # Wait for ongoing requests
-      max_wait_time: "60s"            # Maximum wait time
+      wait_for_ongoing_requests: true # Reserved flag, not separately wired in runtime
+      max_wait_time: "60s"            # Reserved flag, not separately wired in runtime
     
     # Circuit breaker configuration
     circuit_breaker:

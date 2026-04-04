@@ -10,14 +10,14 @@ This plugin provides comprehensive HTTP server functionality for the Lynx framew
 - **Custom Response Encoding**: Flexible response encoding and error handling
 - **Health Checking**: Built-in health check endpoints with detailed status information
 - **Event Emission**: Integration with Lynx event system for monitoring and observability
-- **Performance Optimization**: Connection pooling, timeout management, and buffer optimization
-- **Security Features**: Rate limiting, request size limits, and security headers
+- **Performance Optimization**: Timeout controls, concurrency limits, and buffer tuning
+- **Security Features**: Rate limiting and request size limits, with reserved config fields for future CORS/security-header wiring
 - **Monitoring**: Comprehensive Prometheus metrics and observability
 
 ## Installation
 
 ```bash
-go get github.com/go-lynx/lynx/plugins/service/http
+go get github.com/go-lynx/lynx-http
 ```
 
 ## Quick Start
@@ -28,9 +28,9 @@ go get github.com/go-lynx/lynx/plugins/service/http
 package main
 
 import (
-    "github.com/go-lynx/lynx/app"
-    "github.com/go-lynx/lynx/plugins/service/http"
-    "github.com/go-lynx/lynx/plugins/service/http/conf"
+    lynx "github.com/go-lynx/lynx"
+    http "github.com/go-lynx/lynx-http"
+    "github.com/go-lynx/lynx-http/conf"
     "google.golang.org/protobuf/types/known/durationpb"
 )
 
@@ -66,7 +66,7 @@ func main() {
     }
     
     // Register with Lynx application
-    app.Lynx().GetPluginManager().RegisterPlugin(httpPlugin)
+    lynx.Lynx().GetPluginManager().RegisterPlugin(httpPlugin)
 }
 ```
 
@@ -95,7 +95,7 @@ lynx:
     
     security:
       max_request_size: 10485760  # 10MB
-      cors:
+      cors:                       # Reserved config: current runtime does not inject CORS middleware automatically
         enabled: true
         allowed_origins: ["*"]
         allowed_methods: ["GET", "POST", "PUT", "DELETE"]
@@ -104,7 +104,7 @@ lynx:
         enabled: true
         rate_per_second: 100
         burst_limit: 200
-      security_headers:
+      security_headers:           # Reserved config: current runtime does not emit these headers automatically
         enabled: true
         content_security_policy: "default-src 'self'"
         x_frame_options: "DENY"
@@ -120,7 +120,7 @@ lynx:
       write_timeout: 30s
       idle_timeout: 60s
       read_header_timeout: 20s
-      connection_pool:
+      connection_pool:            # Reserved config: currently only used for monitoring metadata, not a real outbound pool
         max_idle_conns: 100
         max_idle_conns_per_host: 10
         max_conns_per_host: 100
@@ -135,9 +135,9 @@ lynx:
       enable_metrics: true
     
     graceful_shutdown:
-      shutdown_timeout: 30s
-      wait_for_ongoing_requests: true
-      max_wait_time: 60s
+      shutdown_timeout: 30s       # Active today
+      wait_for_ongoing_requests: true # Reserved flag, not separately wired in runtime
+      max_wait_time: 60s          # Reserved flag, not separately wired in runtime
 ```
 
 ### TLS Configuration
@@ -238,7 +238,7 @@ Available metrics:
 The plugin integrates with Lynx's logging system:
 
 ```go
-import "github.com/go-lynx/lynx/app/log"
+import "github.com/go-lynx/lynx/log"
 
 // Logs are automatically generated for:
 // - Request/response details
@@ -251,7 +251,7 @@ import "github.com/go-lynx/lynx/app/log"
 
 ### Connection Pooling
 
-Configure connection pooling for optimal performance:
+`performance.connection_pool` is currently a documentation-compatible placeholder. The runtime exports connection-pool usage metrics based on active request concurrency, but it does not construct a standalone outbound HTTP pool from these fields.
 
 ```yaml
 performance:
@@ -309,7 +309,7 @@ security:
 
 ### Security Headers
 
-Enable security headers:
+`security.security_headers` is kept in the schema for forward compatibility, but the current runtime does not automatically append these headers to responses. Use dedicated middleware or an upstream proxy if you need them today.
 
 ```yaml
 security:
@@ -323,7 +323,7 @@ security:
 
 ### CORS Configuration
 
-Configure CORS for web applications:
+`security.cors` is also schema-only at the moment. If you need browser CORS enforcement in production, add explicit HTTP middleware or terminate behind a gateway that owns the policy.
 
 ```yaml
 security:
@@ -356,7 +356,7 @@ If `ErrorCodeMapper` is nil, the plugin uses `se.Code` or 500. For fully custom 
 
 ## Graceful Shutdown
 
-The plugin supports graceful shutdown:
+The plugin currently applies `shutdown_timeout` during managed cleanup. `wait_for_ongoing_requests` and `max_wait_time` remain reserved config fields and are not wired as separate runtime behaviors yet.
 
 ```yaml
 graceful_shutdown:
@@ -370,25 +370,25 @@ graceful_shutdown:
 ### Unit Tests
 
 ```bash
-go test ./plugins/service/http -v
+go test ./... -v
 ```
 
 ### Integration Tests
 
 ```bash
-go test ./plugins/service/http -v -tags=integration
+go test ./... -v
 ```
 
 ### Stress Tests
 
 ```bash
-go test ./plugins/service/http -v -run=TestHTTPPluginStress
+go test ./... -v -run=TestHTTPPluginStress -count=1
 ```
 
 ### Benchmarks
 
 ```bash
-go test ./plugins/service/http -bench=. -benchmem
+go test ./... -bench=. -benchmem
 ```
 
 ## Troubleshooting
@@ -406,7 +406,7 @@ go test ./plugins/service/http -bench=. -benchmem
    - Verify firewall settings
 
 3. **High Memory Usage**
-   - Adjust connection pool settings
+   - Adjust concurrency limits and timeout settings
    - Reduce buffer sizes
    - Monitor request size limits
 
@@ -420,7 +420,7 @@ go test ./plugins/service/http -bench=. -benchmem
 Enable debug logging:
 
 ```go
-import "github.com/go-lynx/lynx/app/log"
+import "github.com/go-lynx/lynx/log"
 
 log.SetLevel(log.DebugLevel)
 ```
