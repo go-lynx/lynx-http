@@ -507,6 +507,7 @@ func (h *ServiceHttp) startupWithContext(ctx context.Context) error {
 	if h.conf == nil {
 		return fmt.Errorf("HTTP configuration not initialized")
 	}
+	h.publishRuntimeContract(false, false)
 
 	// Log HTTP service startup
 	log.Infof("Starting HTTP service on %s", h.conf.Addr)
@@ -586,6 +587,10 @@ func (h *ServiceHttp) startupWithContext(ctx context.Context) error {
 				log.Warnf("failed to register http shared resource %s: %v", resourceName, err)
 			}
 		}
+		h.registerRuntimePluginAlias()
+		if err := h.rt.RegisterPrivateResource("config", h.conf); err != nil {
+			log.Warnf("failed to register http private config resource: %v", err)
+		}
 		if err := h.rt.RegisterPrivateResource("server", h.server); err != nil {
 			log.Warnf("failed to register http private server resource: %v", err)
 		}
@@ -623,6 +628,12 @@ func (h *ServiceHttp) startupWithContext(ctx context.Context) error {
 	}
 	// Adapt net/http.Handler to kratos http.HandlerFunc
 	h.server.HandlePrefix(h.healthPath(), &netHTTPToKratosHandlerAdapter{handler: h.healthCheckHandler()})
+
+	if err := h.CheckHealth(); err != nil {
+		h.publishRuntimeContract(false, false)
+		return err
+	}
+	h.publishRuntimeContract(true, true)
 
 	// Success - clear cleanup function
 	cleanup = nil
@@ -775,6 +786,7 @@ func (h *ServiceHttp) cleanupWithContext(parentCtx context.Context) error {
 	}
 
 	log.Infof("Starting graceful shutdown of HTTP service")
+	h.publishRuntimeContract(false, false)
 
 	// Set shutdown flag with mutex protection
 	h.shutdownMu.Lock()
