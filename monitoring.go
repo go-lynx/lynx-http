@@ -236,8 +236,9 @@ func (h *ServiceHttp) CheckHealth() error {
 
 	// During startup, only check if server is configured properly
 	// Skip port connection check as server may not be listening yet
-	if h.conf != nil && h.conf.Addr != "" {
-		log.Debugf("HTTP server configured for address: %s", h.conf.Addr)
+	_, addr := h.listenConfigSnapshot()
+	if addr != "" {
+		log.Debugf("HTTP server configured for address: %s", addr)
 	} else {
 		return fmt.Errorf("HTTP server address not configured")
 	}
@@ -253,8 +254,7 @@ func (h *ServiceHttp) CheckHealth() error {
 
 // CheckRuntimeHealth performs a comprehensive runtime health check including port connectivity.
 // This is used by the health check endpoint when the service is running.
-// It uses a cache to avoid frequent network dials when checks are successful,
-// but always performs a real check on failures to ensure immediate issue detection.
+// It briefly caches successful and failed port probes to reduce health-check overhead.
 // Note: Health check metrics (success/failure) are recorded by the HTTP handler that calls this,
 // to avoid double-counting when used from healthCheckHandler.
 func (h *ServiceHttp) CheckRuntimeHealth() error {
@@ -263,11 +263,12 @@ func (h *ServiceHttp) CheckRuntimeHealth() error {
 	}
 
 	// Check if the listen address is accepting connections.
-	if h.conf.Addr != "" {
+	_, addr := h.listenConfigSnapshot()
+	if addr != "" {
 		// Use cached check result to avoid frequent network dials
 		// Only cache failures briefly, never cache successes
 		if err := h.checkPortAvailability(); err != nil {
-			return fmt.Errorf("HTTP server is not listening on %s: %w", h.conf.Addr, err)
+			return fmt.Errorf("HTTP server is not listening on %s: %w", addr, err)
 		}
 	}
 
@@ -403,12 +404,12 @@ func clampUsage(v float64) float64 {
 // It always performs a real network check to ensure real-time failure detection.
 // Failed checks are cached briefly to avoid hammering unreachable ports.
 func (h *ServiceHttp) checkPortAvailability() error {
-	if h.conf == nil || h.conf.Addr == "" {
+	network, addr := h.listenConfigSnapshot()
+	if addr == "" {
 		return fmt.Errorf("server address not configured")
 	}
 
 	// Parse address and normalize host for dial
-	addr := h.conf.Addr
 	if !strings.Contains(addr, ":") {
 		addr = ":" + addr
 	}
@@ -422,31 +423,37 @@ func (h *ServiceHttp) checkPortAvailability() error {
 	norm := net.JoinHostPort(host, port)
 
 	// Only check TCP network here
-	if h.conf.Network != "" && h.conf.Network != "tcp" && h.conf.Network != "tcp4" && h.conf.Network != "tcp6" {
+	if network != "" && network != "tcp" && network != "tcp4" && network != "tcp6" {
 		return nil
 	}
 
-	// Check if we recently failed and should skip retry to avoid hammering
+	// Check if we recently checked this port successfully. Health endpoints can be hit
+	// many times per second by orchestrators, so cache success briefly.
 	h.portCheckCache.mu.RLock()
 	lastFailure := h.portCheckCache.lastFailure
+	lastSuccess := h.portCheckCache.lastSuccess
 	lastError := h.portCheckCache.lastError
 	retryWindow := h.portCheckCache.retryWindow
+	successWindow := h.portCheckCache.successWindow
 	h.portCheckCache.mu.RUnlock()
 
 	now := time.Now()
+	if !lastSuccess.IsZero() && successWindow > 0 && now.Sub(lastSuccess) < successWindow {
+		return nil
+	}
 	// If we have a recent failure within retry window, return cached error
 	// This avoids hammering unreachable ports while still checking frequently
 	if lastError != nil && !lastFailure.IsZero() && now.Sub(lastFailure) < retryWindow {
 		return fmt.Errorf("port %s is not reachable (cached): %v", norm, lastError)
 	}
 
-	// Always perform actual network check for real-time detection
-	// This ensures we detect server crashes immediately, not after cache expiry
+	// Perform actual network check after the short success/failure cache expires.
 	conn, err := net.DialTimeout("tcp", norm, 2*time.Second)
 	if err != nil {
 		// Cache failure to avoid frequent retries
 		h.portCheckCache.mu.Lock()
 		h.portCheckCache.lastFailure = now
+		h.portCheckCache.lastSuccess = time.Time{}
 		h.portCheckCache.lastError = err
 		h.portCheckCache.mu.Unlock()
 		return fmt.Errorf("port %s is not reachable: %v", norm, err)
@@ -456,9 +463,10 @@ func (h *ServiceHttp) checkPortAvailability() error {
 		return fmt.Errorf("failed to close health check connection: %w", err)
 	}
 
-	// Clear cache on success - we never cache successes to ensure real-time detection
+	// Clear failure cache on success and remember success briefly.
 	h.portCheckCache.mu.Lock()
 	h.portCheckCache.lastFailure = time.Time{} // Clear failure cache
+	h.portCheckCache.lastSuccess = now
 	h.portCheckCache.lastError = nil
 	h.portCheckCache.mu.Unlock()
 

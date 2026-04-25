@@ -18,6 +18,9 @@ import (
 
 // buildMiddlewares builds the middleware chain based on configuration.
 func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
+	h.confMu.RLock()
+	defer h.confMu.RUnlock()
+
 	var middlewares []middleware.Middleware
 
 	cfg := h.conf
@@ -216,8 +219,12 @@ func (h *ServiceHttp) metricsMiddleware() middleware.Middleware {
 
 			// Increment active connections
 			if h.activeConnections != nil && h.connectionMetricsEnabled() {
-				h.activeConnections.WithLabelValues(h.conf.Addr).Inc()
-				defer h.activeConnections.WithLabelValues(h.conf.Addr).Dec()
+				_, addr := h.listenConfigSnapshot()
+				if addr == "" {
+					addr = "unknown"
+				}
+				h.activeConnections.WithLabelValues(addr).Inc()
+				defer h.activeConnections.WithLabelValues(addr).Dec()
 			}
 
 			// Increment inflight requests

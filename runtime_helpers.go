@@ -27,6 +27,18 @@ var sensitiveHeaderKeys = map[string]struct{}{
 	"x-auth-token":  {},
 }
 
+type monitoringSnapshot struct {
+	enableMetrics           bool
+	enableRequestLogging    bool
+	enableErrorLogging      bool
+	enableRouteMetrics      bool
+	enableConnectionMetrics bool
+	enableQueueMetrics      bool
+	enableErrorTypeMetrics  bool
+	metricsPath             string
+	healthPath              string
+}
+
 func currentLynxApp() *lynx.LynxApp {
 	return lynx.Lynx()
 }
@@ -45,18 +57,23 @@ func currentLynxName() string {
 }
 
 func (h *ServiceHttp) monitoringConfigOrDefault() *conf.MonitoringConfig {
+	snap := h.monitoringSnapshotOrDefault()
+	return &conf.MonitoringConfig{
+		EnableMetrics:           snap.enableMetrics,
+		EnableRequestLogging:    snap.enableRequestLogging,
+		EnableErrorLogging:      snap.enableErrorLogging,
+		EnableRouteMetrics:      snap.enableRouteMetrics,
+		EnableConnectionMetrics: snap.enableConnectionMetrics,
+		EnableQueueMetrics:      snap.enableQueueMetrics,
+		EnableErrorTypeMetrics:  snap.enableErrorTypeMetrics,
+		MetricsPath:             snap.metricsPath,
+		HealthPath:              snap.healthPath,
+	}
+}
+
+func (h *ServiceHttp) monitoringConfigOrDefaultLocked() *conf.MonitoringConfig {
 	if h == nil || h.conf == nil || h.conf.Monitoring == nil {
-		return &conf.MonitoringConfig{
-			EnableMetrics:           true,
-			EnableRequestLogging:    true,
-			EnableErrorLogging:      true,
-			EnableRouteMetrics:      true,
-			EnableConnectionMetrics: true,
-			EnableQueueMetrics:      true,
-			EnableErrorTypeMetrics:  true,
-			MetricsPath:             defaultMetricsPath,
-			HealthPath:              defaultHealthPath,
-		}
+		return defaultMonitoringConfig()
 	}
 	cfg, ok := proto.Clone(h.conf.Monitoring).(*conf.MonitoringConfig)
 	if !ok || cfg == nil {
@@ -71,12 +88,107 @@ func (h *ServiceHttp) monitoringConfigOrDefault() *conf.MonitoringConfig {
 	return cfg
 }
 
+func defaultMonitoringConfig() *conf.MonitoringConfig {
+	return &conf.MonitoringConfig{
+		EnableMetrics:           true,
+		EnableRequestLogging:    true,
+		EnableErrorLogging:      true,
+		EnableRouteMetrics:      true,
+		EnableConnectionMetrics: true,
+		EnableQueueMetrics:      true,
+		EnableErrorTypeMetrics:  true,
+		MetricsPath:             defaultMetricsPath,
+		HealthPath:              defaultHealthPath,
+	}
+}
+
+func defaultMonitoringSnapshot() *monitoringSnapshot {
+	return &monitoringSnapshot{
+		enableMetrics:           true,
+		enableRequestLogging:    true,
+		enableErrorLogging:      true,
+		enableRouteMetrics:      true,
+		enableConnectionMetrics: true,
+		enableQueueMetrics:      true,
+		enableErrorTypeMetrics:  true,
+		metricsPath:             defaultMetricsPath,
+		healthPath:              defaultHealthPath,
+	}
+}
+
+func monitoringSnapshotFromConfig(cfg *conf.MonitoringConfig) *monitoringSnapshot {
+	if cfg == nil {
+		return defaultMonitoringSnapshot()
+	}
+	snap := &monitoringSnapshot{
+		enableMetrics:           cfg.EnableMetrics,
+		enableRequestLogging:    cfg.EnableRequestLogging,
+		enableErrorLogging:      cfg.EnableErrorLogging,
+		enableRouteMetrics:      cfg.EnableRouteMetrics,
+		enableConnectionMetrics: cfg.EnableConnectionMetrics,
+		enableQueueMetrics:      cfg.EnableQueueMetrics,
+		enableErrorTypeMetrics:  cfg.EnableErrorTypeMetrics,
+		metricsPath:             strings.TrimSpace(cfg.MetricsPath),
+		healthPath:              strings.TrimSpace(cfg.HealthPath),
+	}
+	if snap.metricsPath == "" {
+		snap.metricsPath = defaultMetricsPath
+	}
+	if snap.healthPath == "" {
+		snap.healthPath = defaultHealthPath
+	}
+	return snap
+}
+
+func (h *ServiceHttp) refreshMonitoringSnapshotLocked() {
+	if h == nil {
+		return
+	}
+	if h.conf == nil {
+		h.monitoringSnapshot.Store(defaultMonitoringSnapshot())
+		return
+	}
+	h.monitoringSnapshot.Store(monitoringSnapshotFromConfig(h.conf.Monitoring))
+}
+
+func (h *ServiceHttp) monitoringSnapshotOrDefault() *monitoringSnapshot {
+	if h == nil {
+		return defaultMonitoringSnapshot()
+	}
+	if snap, ok := h.monitoringSnapshot.Load().(*monitoringSnapshot); ok && snap != nil {
+		return snap
+	}
+	h.confMu.RLock()
+	var snap *monitoringSnapshot
+	if h.conf != nil {
+		snap = monitoringSnapshotFromConfig(h.conf.Monitoring)
+	}
+	h.confMu.RUnlock()
+	if snap == nil {
+		snap = defaultMonitoringSnapshot()
+	}
+	h.monitoringSnapshot.Store(snap)
+	return snap
+}
+
+func (h *ServiceHttp) listenConfigSnapshot() (network, addr string) {
+	if h == nil {
+		return "", ""
+	}
+	h.confMu.RLock()
+	defer h.confMu.RUnlock()
+	if h.conf == nil {
+		return "", ""
+	}
+	return h.conf.Network, h.conf.Addr
+}
+
 func (h *ServiceHttp) requestLoggingEnabled() bool {
-	return h.monitoringConfigOrDefault().EnableRequestLogging
+	return h.monitoringSnapshotOrDefault().enableRequestLogging
 }
 
 func (h *ServiceHttp) errorLoggingEnabled() bool {
-	return h.monitoringConfigOrDefault().EnableErrorLogging
+	return h.monitoringSnapshotOrDefault().enableErrorLogging
 }
 
 func requestLoggingEnabled(service *ServiceHttp) bool {
@@ -88,31 +200,31 @@ func errorLoggingEnabled(service *ServiceHttp) bool {
 }
 
 func (h *ServiceHttp) metricsEndpointEnabled() bool {
-	return h.monitoringConfigOrDefault().EnableMetrics
+	return h.monitoringSnapshotOrDefault().enableMetrics
 }
 
 func (h *ServiceHttp) metricsPath() string {
-	return h.monitoringConfigOrDefault().MetricsPath
+	return h.monitoringSnapshotOrDefault().metricsPath
 }
 
 func (h *ServiceHttp) healthPath() string {
-	return h.monitoringConfigOrDefault().HealthPath
+	return h.monitoringSnapshotOrDefault().healthPath
 }
 
 func (h *ServiceHttp) routeMetricsEnabled() bool {
-	return h.monitoringConfigOrDefault().EnableRouteMetrics
+	return h.monitoringSnapshotOrDefault().enableRouteMetrics
 }
 
 func (h *ServiceHttp) connectionMetricsEnabled() bool {
-	return h.monitoringConfigOrDefault().EnableConnectionMetrics
+	return h.monitoringSnapshotOrDefault().enableConnectionMetrics
 }
 
 func (h *ServiceHttp) queueMetricsEnabled() bool {
-	return h.monitoringConfigOrDefault().EnableQueueMetrics
+	return h.monitoringSnapshotOrDefault().enableQueueMetrics
 }
 
 func (h *ServiceHttp) errorTypeMetricsEnabled() bool {
-	return h.monitoringConfigOrDefault().EnableErrorTypeMetrics
+	return h.monitoringSnapshotOrDefault().enableErrorTypeMetrics
 }
 
 func (h *ServiceHttp) recordErrorMetric(method, path, errorType string) {
@@ -188,7 +300,14 @@ func (h *ServiceHttp) ensureSemaphores() {
 }
 
 func (h *ServiceHttp) ensureCircuitBreaker() *CircuitBreaker {
+	if h == nil {
+		return nil
+	}
+	h.confMu.Lock()
+	defer h.confMu.Unlock()
+
 	if h == nil || h.conf == nil || h.conf.CircuitBreaker == nil || !h.conf.CircuitBreaker.Enabled {
+		h.circuitBreaker = nil
 		return nil
 	}
 
@@ -202,9 +321,6 @@ func (h *ServiceHttp) ensureCircuitBreaker() *CircuitBreaker {
 		MaxRequests:      h.conf.CircuitBreaker.MaxRequests,
 		FailureThreshold: h.conf.CircuitBreaker.FailureThreshold,
 	}
-
-	h.confMu.Lock()
-	defer h.confMu.Unlock()
 
 	if h.circuitBreaker == nil || h.circuitBreaker.config != cfg {
 		h.circuitBreaker = NewCircuitBreaker(cfg)
