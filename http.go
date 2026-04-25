@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-kratos/kratos/v2/errors"
@@ -104,17 +105,20 @@ type ServiceHttp struct {
 	metricsRootCancel context.CancelFunc
 	metricsCtx        context.Context
 	metricsCancel     context.CancelFunc
-	// Port availability check cache to avoid frequent retries on failures
-	// Note: We only cache failures, never successes, to ensure real-time detection
+	// Port availability check cache to avoid hammering local ports from health probes.
+	// Failures and successes are cached briefly.
 	portCheckCache struct {
-		mu          sync.RWMutex
-		lastFailure time.Time
-		lastError   error
-		retryWindow time.Duration // Avoid retrying failed checks within this window
+		mu            sync.RWMutex
+		lastFailure   time.Time
+		lastSuccess   time.Time
+		lastError     error
+		retryWindow   time.Duration // Avoid retrying failed checks within this window
+		successWindow time.Duration
 	}
-	// confMu protects conf pointer replacement in Configure; readers may read conf without lock (pointer read is atomic).
-	confMu sync.Mutex
-	rt     plugins.Runtime
+	// confMu protects configuration and derived runtime fields rebuilt from configuration.
+	confMu             sync.RWMutex
+	rt                 plugins.Runtime
+	monitoringSnapshot atomic.Value // stores *monitoringSnapshot
 
 	// ErrorCodeMapper is an optional hook to map Kratos errors to a response "code" in the JSON body.
 	// When nil, the plugin uses Kratos se.Code or 500. Set by the application for business-specific codes.
@@ -156,15 +160,17 @@ func NewServiceHttp() *ServiceHttp {
 			10,
 		),
 		shutdownChan: make(chan struct{}),
-		// Initialize port check cache to avoid frequent retries on failures
-		// Success checks are never cached to ensure real-time failure detection
+		// Initialize port check cache to avoid frequent retries from health probes.
 		portCheckCache: struct {
-			mu          sync.RWMutex
-			lastFailure time.Time
-			lastError   error
-			retryWindow time.Duration
+			mu            sync.RWMutex
+			lastFailure   time.Time
+			lastSuccess   time.Time
+			lastError     error
+			retryWindow   time.Duration
+			successWindow time.Duration
 		}{
-			retryWindow: 500 * time.Millisecond, // Short window to avoid hammering failed ports
+			retryWindow:   500 * time.Millisecond,
+			successWindow: time.Second,
 		},
 	}
 }
@@ -187,6 +193,7 @@ func (h *ServiceHttp) InitializeResources(rt plugins.Runtime) error {
 
 	// Set default configuration
 	h.setDefaultConfig()
+	h.refreshMonitoringSnapshotLocked()
 
 	// Validate configuration
 	if err := h.validateConfig(); err != nil {
@@ -239,6 +246,15 @@ func (h *ServiceHttp) setDefaultConfig() {
 
 // validateConfig validates configuration parameters.
 func (h *ServiceHttp) validateConfig() error {
+	h.confMu.RLock()
+	defer h.confMu.RUnlock()
+	return h.validateConfigLocked()
+}
+
+func (h *ServiceHttp) validateConfigLocked() error {
+	if h.conf == nil {
+		return fmt.Errorf("configuration is nil")
+	}
 	validNetworks := []string{"tcp", "tcp4", "tcp6", "unix", "unixpacket"}
 	networkValid := h.conf.Network == ""
 	for _, n := range validNetworks {
@@ -848,13 +864,14 @@ func (h *ServiceHttp) Configure(c any) error {
 	}
 
 	h.confMu.Lock()
-	defer h.confMu.Unlock()
-
 	oldConf := h.conf
 	h.conf = httpConf
 	h.setDefaultConfig()
-	if err := h.validateConfig(); err != nil {
+	h.refreshMonitoringSnapshotLocked()
+	if err := h.validateConfigLocked(); err != nil {
 		h.conf = oldConf
+		h.refreshMonitoringSnapshotLocked()
+		h.confMu.Unlock()
 		log.Errorf("Invalid new configuration, rolling back: %v", err)
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
@@ -863,8 +880,11 @@ func (h *ServiceHttp) Configure(c any) error {
 	h.circuitBreaker = nil
 	resetOnce(&h.semInitOnce)
 	resetOnce(&h.circuitBreakerOnce)
+	serverStarted := h.server != nil
+	h.confMu.Unlock()
+
 	log.Infof("HTTP configuration updated successfully")
-	if h.server != nil {
+	if serverStarted {
 		h.applyPerformanceConfig()
 		h.reconfigureMetricsLoop()
 		log.Infof("HTTP configuration changes were applied to dynamic runtime state; route and middleware wiring changes still require managed restart")
