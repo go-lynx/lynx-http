@@ -116,7 +116,7 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 // Semaphores are initialized once and reused across all requests.
 func (h *ServiceHttp) connectionLimitMiddleware() middleware.Middleware {
 	return func(handler middleware.Handler) middleware.Handler {
-		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
+		return func(ctx context.Context, req any) (reply any, err error) {
 			h.ensureSemaphores()
 
 			// Apply concurrent request limit (maxConnections cap)
@@ -167,7 +167,7 @@ func (h *ServiceHttp) connectionLimitMiddleware() middleware.Middleware {
 // recoveryMiddleware returns a recovery middleware.
 func (h *ServiceHttp) recoveryMiddleware() middleware.Middleware {
 	return recovery.Recovery(
-		recovery.WithHandler(func(ctx context.Context, req, err interface{}) error {
+		recovery.WithHandler(func(ctx context.Context, req, err any) error {
 			log.ErrorCtx(ctx, "Panic recovered", "error", err)
 
 			// Record error metrics
@@ -182,7 +182,7 @@ func (h *ServiceHttp) recoveryMiddleware() middleware.Middleware {
 // rateLimitMiddleware returns a rate limit middleware.
 func (h *ServiceHttp) rateLimitMiddleware() middleware.Middleware {
 	return func(handler middleware.Handler) middleware.Handler {
-		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
+		return func(ctx context.Context, req any) (reply any, err error) {
 			// Get request information
 			method, path := requestMetadata(ctx)
 
@@ -205,7 +205,7 @@ func (h *ServiceHttp) rateLimitMiddleware() middleware.Middleware {
 // metricsMiddleware returns a metrics middleware.
 func (h *ServiceHttp) metricsMiddleware() middleware.Middleware {
 	return func(handler middleware.Handler) middleware.Handler {
-		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
+		return func(ctx context.Context, req any) (reply any, err error) {
 			start := time.Now()
 
 			// Get request information

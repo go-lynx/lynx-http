@@ -221,7 +221,7 @@ func (cb *CircuitBreaker) GetWindowRequests() int32 {
 // circuitBreakerMiddleware creates a circuit breaker middleware for HTTP requests
 func (h *ServiceHttp) circuitBreakerMiddleware() middleware.Middleware {
 	return func(handler middleware.Handler) middleware.Handler {
-		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
+		return func(ctx context.Context, req any) (reply any, err error) {
 			cb := h.ensureCircuitBreaker()
 			if cb == nil {
 				return handler(ctx, req)
@@ -257,16 +257,16 @@ func (h *ServiceHttp) circuitBreakerMiddleware() middleware.Middleware {
 }
 
 // GetCircuitBreakerStats returns circuit breaker statistics
-func (h *ServiceHttp) GetCircuitBreakerStats() map[string]interface{} {
+func (h *ServiceHttp) GetCircuitBreakerStats() map[string]any {
 	if h.circuitBreaker == nil {
-		return map[string]interface{}{
+		return map[string]any{
 			"enabled": false,
 		}
 	}
 
 	failures, requests, successes, state := h.circuitBreaker.GetStats()
 
-	return map[string]interface{}{
+	return map[string]any{
 		"enabled":         true,
 		"state":           state,
 		"failures":        failures,

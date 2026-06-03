@@ -332,12 +332,12 @@ func (h *ServiceHttp) healthCheckHandler() nhttp.Handler {
 		// Execute runtime health check (includes port connectivity)
 		err := h.CheckRuntimeHealth()
 
-		var response map[string]interface{}
+		var response map[string]any
 		var statusCode int
 
 		if err != nil {
 			statusCode = nhttp.StatusServiceUnavailable
-			response = map[string]interface{}{
+			response = map[string]any{
 				"status": "unhealthy",
 				"error":  err.Error(),
 				"time":   time.Now().Format(time.RFC3339),
@@ -348,7 +348,7 @@ func (h *ServiceHttp) healthCheckHandler() nhttp.Handler {
 			}
 		} else {
 			statusCode = nhttp.StatusOK
-			response = map[string]interface{}{
+			response = map[string]any{
 				"status": "healthy",
 				"time":   time.Now().Format(time.RFC3339),
 			}
