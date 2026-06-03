@@ -74,7 +74,7 @@ func getClientIP(header transport.Header) string {
 // It extracts trace from context (or from request headers like W3C traceparent if not yet in context) and sets "Trace-Id" and "Span-Id" in response headers. Invalid/empty span is returned as "none".
 func TracerLogPack() middleware.Middleware {
 	return func(handler middleware.Handler) middleware.Handler {
-		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
+		return func(ctx context.Context, req any) (reply any, err error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
@@ -141,7 +141,7 @@ func TracerLogPack() middleware.Middleware {
 // Trace is extracted from request headers (W3C traceparent) when not already in context; invalid span is returned as "none" in response headers.
 func TracerLogPackWithMetrics(service *ServiceHttp) middleware.Middleware {
 	return func(handler middleware.Handler) middleware.Handler {
-		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
+		return func(ctx context.Context, req any) (reply any, err error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
