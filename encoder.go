@@ -28,11 +28,11 @@ type Response struct {
 	// Message is the descriptive message of the response.
 	Message string `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
 	// Data is the payload carried by the response.
-	Data interface{} `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	Data any `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
 }
 
 // shouldOmitSuccessData 为 true 时不输出 data 字段（例如 LogoutReply 等空 proto、nil、空 map/slice）。
-func shouldOmitSuccessData(data interface{}) bool {
+func shouldOmitSuccessData(data any) bool {
 	if data == nil {
 		return true
 	}
@@ -59,7 +59,7 @@ func shouldOmitSuccessData(data interface{}) bool {
 // r is the HTTP request object (currently unused).
 // data is the response payload to encode.
 // Returns an error if encoding fails.
-func ResponseEncoder(w http.ResponseWriter, r *http.Request, data interface{}) error {
+func ResponseEncoder(w http.ResponseWriter, r *http.Request, data any) error {
 	res := &Response{
 		Code: 200,
 	}

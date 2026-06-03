@@ -18,7 +18,7 @@ type requestLogRedacter interface {
 
 func (h *ServiceHttp) loggingMiddleware() middleware.Middleware {
 	return func(handler middleware.Handler) middleware.Handler {
-		return func(ctx context.Context, req interface{}) (reply interface{}, err error) {
+		return func(ctx context.Context, req any) (reply any, err error) {
 			var (
 				kind      string
 				operation string
@@ -53,7 +53,7 @@ func (h *ServiceHttp) loggingMiddleware() middleware.Middleware {
 	}
 }
 
-func requestLogArgs(req interface{}) string {
+func requestLogArgs(req any) string {
 	if redacter, ok := req.(requestLogRedacter); ok {
 		return redacter.Redact()
 	}

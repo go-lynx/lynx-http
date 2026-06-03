@@ -269,7 +269,7 @@ func sanitizeHeaders(header transport.Header) map[string]string {
 	return headers
 }
 
-func summarizePayload(payload interface{}) string {
+func summarizePayload(payload any) string {
 	if payload == nil {
 		return "<nil>"
 	}

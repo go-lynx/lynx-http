@@ -41,7 +41,7 @@ func (h *ServiceHttp) notFoundHandler() http.Handler {
 		w.WriteHeader(http.StatusNotFound)
 
 		// Only return code, not message, to avoid exposing sensitive information to frontend
-		response := map[string]interface{}{
+		response := map[string]any{
 			"code": 404,
 			// Message field removed for security reasons
 		}
@@ -74,7 +74,7 @@ func (h *ServiceHttp) methodNotAllowedHandler() http.Handler {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 
 		// Only return code, not message, to avoid exposing sensitive information to frontend
-		response := map[string]interface{}{
+		response := map[string]any{
 			"code": 405,
 			// Message field removed for security reasons
 		}
@@ -119,7 +119,7 @@ func (h *ServiceHttp) enhancedErrorEncoder(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpStatus)
-	response := map[string]interface{}{"code": bodyCode}
+	response := map[string]any{"code": bodyCode}
 	data, marshalErr := json.Marshal(response)
 	if marshalErr != nil {
 		log.Errorf("Failed to encode error response: %v", marshalErr)
