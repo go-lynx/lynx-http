@@ -9,17 +9,11 @@ import (
 	"github.com/go-lynx/lynx/log"
 )
 
-// tlsLoad creates and configures TLS settings for the HTTP server.
-// It performs the following operations:
-//   - Loads the X.509 certificate and private key pair
-//   - Creates a certificate pool and adds the root CA certificate
-//   - Configures TLS settings including client authentication type
-//
-// Returns:
-//   - http.ServerOption: A configured TLS option for the HTTP server
-//   - error: Any error that occurred during TLS configuration
+// tlsLoad builds the server TLS option from the Lynx certificate provider.
+// Certs are served via a GetCertificate callback so file-watch rotation takes effect without
+// a restart. Client mTLS is enabled only when a root CA is present; otherwise ClientCAs is left
+// unset and client-cert verification is effectively disabled regardless of the configured auth type.
 func (h *ServiceHttp) tlsLoad() (http.ServerOption, error) {
-	// Get the certificate provider from the global Lynx app if available.
 	app := currentLynxApp()
 	if app == nil {
 		return nil, fmt.Errorf("lynx app not initialized")

@@ -60,9 +60,9 @@ type RequestGuard struct {
 	allowed bool
 }
 
-// NewCircuitBreaker creates a new circuit breaker
+// NewCircuitBreaker returns a breaker in the closed state, applying defaults
+// (MaxFailures=5, Timeout=60s, MaxRequests=10, FailureThreshold=0.5) for any zero field.
 func NewCircuitBreaker(config CircuitBreakerConfig) *CircuitBreaker {
-	// Set defaults if not provided
 	if config.MaxFailures == 0 {
 		config.MaxFailures = 5
 	}
@@ -107,7 +107,7 @@ func (cb *CircuitBreaker) Allow() RequestGuard {
 		}
 		return RequestGuard{allowed: true}
 	case CircuitBreakerOpen:
-		// Check if timeout has passed.
+		// After the timeout, allow a single probe through (half-open) to test recovery.
 		if time.Since(cb.lastFailTime) > cb.config.Timeout {
 			cb.state = CircuitBreakerHalfOpen
 			cb.requests = 0
@@ -197,14 +197,14 @@ func (cb *CircuitBreaker) RecordFailure(guard RequestGuard) {
 	}
 }
 
-// GetState returns the current state of the circuit breaker
+// GetState returns the current state (closed, open, or half-open).
 func (cb *CircuitBreaker) GetState() CircuitBreakerState {
 	cb.mutex.RLock()
 	defer cb.mutex.RUnlock()
 	return cb.state
 }
 
-// GetStats returns current statistics
+// GetStats returns the current failure, request, and success counters and the breaker state.
 func (cb *CircuitBreaker) GetStats() (int32, int32, int32, CircuitBreakerState) {
 	cb.mutex.RLock()
 	defer cb.mutex.RUnlock()
@@ -227,19 +227,13 @@ func (h *ServiceHttp) circuitBreakerMiddleware() middleware.Middleware {
 				return handler(ctx, req)
 			}
 
-			// Check if request should be allowed
 			guard := cb.Allow()
 			if !guard.Allowed() {
-				// Circuit is open, reject request
 				method, path := requestMetadata(ctx)
-
-				// Record circuit breaker rejection
 				h.recordErrorMetric(method, path, "circuit_breaker_open")
-
 				return nil, fmt.Errorf("circuit breaker is open - service unavailable")
 			}
 
-			// Execute the request
 			reply, err = handler(ctx, req)
 
 			// 与 enhancedErrorEncoder 对齐：仅 body.code==500（系统/未识别）计为服务故障；业务码走 HTTP 200，不得触发熔断。

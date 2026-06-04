@@ -209,9 +209,7 @@ Response:
 ```json
 {
   "status": "healthy",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "uptime": "1h2m3s",
-  "version": "v2.0.0"
+  "time": "2024-01-01T00:00:00Z"
 }
 ```
 

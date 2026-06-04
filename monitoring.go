@@ -243,7 +243,6 @@ func (h *ServiceHttp) CheckHealth() error {
 		return fmt.Errorf("HTTP server address not configured")
 	}
 
-	// Record health check metrics
 	if h.healthCheckTotal != nil {
 		h.healthCheckTotal.WithLabelValues("success").Inc()
 	}
@@ -308,8 +307,6 @@ func (h *ServiceHttp) updateConnectionPoolMetricsOnce(poolName string) {
 		return
 	}
 
-	// Calculate real connection pool usage based on configuration
-	// Note: Prometheus Set() operations don't return errors, so we don't need error handling here
 	if !h.connectionMetricsEnabled() {
 		return
 	}
@@ -318,7 +315,7 @@ func (h *ServiceHttp) updateConnectionPoolMetricsOnce(poolName string) {
 		usage := clampUsage(float64(current) / float64(h.maxConnections))
 		h.connectionPoolUsage.WithLabelValues(poolName).Set(usage)
 	} else {
-		// No connection limit configured, set to 0
+		// No connection limit configured: usage is undefined, report 0.
 		h.connectionPoolUsage.WithLabelValues(poolName).Set(0)
 	}
 }

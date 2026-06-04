@@ -46,7 +46,6 @@ func (h *ServiceHttp) notFoundHandler() http.Handler {
 			// Message field removed for security reasons
 		}
 
-		// Serialize and write the response
 		if data, err := json.Marshal(response); err == nil {
 			_, writeErr := w.Write(data)
 			if writeErr != nil {
@@ -60,7 +59,6 @@ func (h *ServiceHttp) notFoundHandler() http.Handler {
 			}
 		}
 
-		// Record 404 errors
 		h.recordErrorMetric(r.Method, r.URL.Path, "not_found")
 
 		log.Warnf("404 not found: %s %s", r.Method, r.URL.Path)
@@ -79,7 +77,6 @@ func (h *ServiceHttp) methodNotAllowedHandler() http.Handler {
 			// Message field removed for security reasons
 		}
 
-		// Serialize and write the response
 		if data, err := json.Marshal(response); err == nil {
 			_, writeErr := w.Write(data)
 			if writeErr != nil {
@@ -93,7 +90,6 @@ func (h *ServiceHttp) methodNotAllowedHandler() http.Handler {
 			}
 		}
 
-		// Record 405 errors
 		h.recordErrorMetric(r.Method, r.URL.Path, "method_not_allowed")
 
 		log.Warnf("405 method not allowed: %s %s", r.Method, r.URL.Path)

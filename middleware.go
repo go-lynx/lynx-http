@@ -42,14 +42,14 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 		}
 	}
 
-	// Base middlewares - order matters!
-	// Tracing middleware
+	// Order matters: middlewares execute outermost-first in the order appended.
+	// Tracing runs first so the span/trace ID is in context for logging, metrics, and the
+	// downstream handler; recovery sits after validation so panics in any layer are caught.
 	if middlewareCfg.EnableTracing {
 		middlewares = append(middlewares, tracing.Server(tracing.WithTracerName(currentLynxName())))
 		log.Infof("Tracing middleware enabled")
 	}
 
-	// Logging middleware
 	if middlewareCfg.EnableLogging {
 		middlewares = append(middlewares, h.loggingMiddleware())
 		log.Infof("Logging middleware enabled")
@@ -64,19 +64,16 @@ func (h *ServiceHttp) buildMiddlewares() []middleware.Middleware {
 		log.Infof("Metrics middleware enabled")
 	}
 
-	// Request parameter validation middleware
 	if middlewareCfg.EnableValidation {
 		middlewares = append(middlewares, validate.ProtoValidate())
 		log.Infof("Validation middleware enabled")
 	}
 
-	// Recovery middleware
 	if middlewareCfg.EnableRecovery {
 		middlewares = append(middlewares, h.recoveryMiddleware())
 		log.Infof("Recovery middleware enabled")
 	}
 
-	// Security-related middlewares
 	if middlewareCfg.EnableRateLimit {
 		middlewares = append(middlewares, h.rateLimitMiddleware())
 		log.Infof("Rate limit middleware enabled")
@@ -119,7 +116,7 @@ func (h *ServiceHttp) connectionLimitMiddleware() middleware.Middleware {
 		return func(ctx context.Context, req any) (reply any, err error) {
 			h.ensureSemaphores()
 
-			// Apply concurrent request limit (maxConnections cap)
+			// First semaphore caps total in-flight requests (maxConnections).
 			if h.connectionSem != nil {
 				select {
 				case h.connectionSem <- struct{}{}:
@@ -139,20 +136,18 @@ func (h *ServiceHttp) connectionLimitMiddleware() middleware.Middleware {
 						}
 					}()
 				default:
-					// Concurrent request limit exceeded
 					method, path := requestMetadata(ctx)
 					h.recordErrorMetric(method, path, "connection_limit_exceeded")
 					return nil, fmt.Errorf("concurrent request limit exceeded: max %d", h.maxConnections)
 				}
 			}
 
-			// Apply concurrent request limit
+			// Second semaphore caps concurrent requests (maxConcurrentRequests).
 			if h.requestSem != nil {
 				select {
 				case h.requestSem <- struct{}{}:
 					defer func() { <-h.requestSem }()
 				default:
-					// Request limit exceeded
 					method, path := requestMetadata(ctx)
 					h.recordErrorMetric(method, path, "request_limit_exceeded")
 					return nil, fmt.Errorf("concurrent request limit exceeded: max %d requests", h.maxConcurrentRequests)
@@ -183,17 +178,14 @@ func (h *ServiceHttp) recoveryMiddleware() middleware.Middleware {
 func (h *ServiceHttp) rateLimitMiddleware() middleware.Middleware {
 	return func(handler middleware.Handler) middleware.Handler {
 		return func(ctx context.Context, req any) (reply any, err error) {
-			// Get request information
 			method, path := requestMetadata(ctx)
 
-			// Increment request queue length
 			if h.requestQueueLength != nil && h.queueMetricsEnabled() {
 				h.requestQueueLength.WithLabelValues(path).Inc()
 				defer h.requestQueueLength.WithLabelValues(path).Dec()
 			}
 
 			if h.rateLimiter != nil && !h.rateLimiter.Allow() {
-				// Record rate limit metrics
 				h.recordErrorMetric(method, path, "rate_limit_exceeded")
 				return nil, fmt.Errorf("rate limit exceeded")
 			}
@@ -208,16 +200,13 @@ func (h *ServiceHttp) metricsMiddleware() middleware.Middleware {
 		return func(ctx context.Context, req any) (reply any, err error) {
 			start := time.Now()
 
-			// Get request information
 			method := "unknown"
 			path := "unknown"
 			route := "unknown"
 
-			// Use Kratos transport to get request information
 			method, path = requestMetadata(ctx)
 			route = path
 
-			// Increment active connections
 			if h.activeConnections != nil && h.connectionMetricsEnabled() {
 				_, addr := h.listenConfigSnapshot()
 				if addr == "" {
@@ -227,22 +216,18 @@ func (h *ServiceHttp) metricsMiddleware() middleware.Middleware {
 				defer h.activeConnections.WithLabelValues(addr).Dec()
 			}
 
-			// Increment inflight requests
 			if h.inflightRequests != nil {
 				h.inflightRequests.WithLabelValues(path).Inc()
 				defer h.inflightRequests.WithLabelValues(path).Dec()
 			}
 
-			// Handle the request
 			reply, err = handler(ctx, req)
 
-			// Record metrics
 			duration := time.Since(start).Seconds()
 			if h.requestDuration != nil {
 				h.requestDuration.WithLabelValues(method, path).Observe(duration)
 			}
 
-			// Record request count
 			if h.requestCounter != nil {
 				status := "success"
 				if err != nil {
@@ -251,9 +236,8 @@ func (h *ServiceHttp) metricsMiddleware() middleware.Middleware {
 				h.requestCounter.WithLabelValues(method, path, status).Inc()
 			}
 
-			// Record response size
+			// Response size is only measurable for proto replies.
 			if h.responseSize != nil && reply != nil {
-				// Try to get response size
 				if msg, ok := reply.(proto.Message); ok {
 					if data, marshalErr := proto.Marshal(msg); marshalErr == nil {
 						h.responseSize.WithLabelValues(method, path).Observe(float64(len(data)))
@@ -261,7 +245,6 @@ func (h *ServiceHttp) metricsMiddleware() middleware.Middleware {
 				}
 			}
 
-			// Record route metrics
 			if h.routeRequestDuration != nil && h.routeMetricsEnabled() {
 				h.routeRequestDuration.WithLabelValues(route, method).Observe(duration)
 			}

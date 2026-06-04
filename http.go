@@ -23,8 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-// Plugin metadata
-// Basic plugin information definition.
+// Plugin metadata.
 const (
 	// pluginName is the unique identifier for the HTTP server plugin.
 	pluginName = "http.server"
@@ -146,21 +145,14 @@ func (a *netHTTPToKratosHandlerAdapter) Handle(w http.ResponseWriter, r *http.Re
 func NewServiceHttp() *ServiceHttp {
 	return &ServiceHttp{
 		BasePlugin: plugins.NewBasePlugin(
-			// Generate the plugin's unique ID
 			plugins.GeneratePluginID("", pluginName, pluginVersion),
-			// Plugin name
 			pluginName,
-			// Plugin description
 			pluginDescription,
-			// Plugin version
 			pluginVersion,
-			// Configuration prefix
 			confPrefix,
-			// Weight
-			10,
+			10, // load weight
 		),
 		shutdownChan: make(chan struct{}),
-		// Initialize port check cache to avoid frequent retries from health probes.
 		portCheckCache: struct {
 			mu            sync.RWMutex
 			lastFailure   time.Time
@@ -182,21 +174,17 @@ func (h *ServiceHttp) InitializeResources(rt plugins.Runtime) error {
 		return err
 	}
 	h.rt = rt
-	// Initialize an empty configuration struct
 	h.conf = &conf.Http{}
 
-	// Scan and load HTTP configuration from runtime config
 	if cfg := rt.GetConfig(); cfg != nil {
 		if err := cfg.Value(confPrefix).Scan(h.conf); err != nil {
 			log.Warnf("Failed to load HTTP configuration, using defaults: %v", err)
 		}
 	}
 
-	// Set default configuration
 	h.setDefaultConfig()
 	h.refreshMonitoringSnapshotLocked()
 
-	// Validate configuration
 	if err := h.validateConfig(); err != nil {
 		return fmt.Errorf("HTTP configuration validation failed: %w", err)
 	}
@@ -526,7 +514,6 @@ func (h *ServiceHttp) startupWithContext(ctx context.Context) error {
 	}
 	h.publishRuntimeContract(false, false)
 
-	// Log HTTP service startup
 	log.Infof("Starting HTTP service on %s", h.conf.Addr)
 
 	// Track resources that need cleanup on failure
@@ -569,22 +556,18 @@ func (h *ServiceHttp) startupWithContext(ctx context.Context) error {
 
 	// Append additional server options based on configuration
 	if h.conf.Network != "" {
-		// Set network protocol
 		opts = append(opts, http.Network(h.conf.Network))
 	}
 	if h.conf.Addr != "" {
-		// Set listen address
 		opts = append(opts, http.Address(h.conf.Addr))
 	}
 	if h.conf.Timeout != nil {
-		// Set timeout
 		opts = append(opts, http.Timeout(h.conf.Timeout.AsDuration()))
 	}
 	if h.conf.GetTlsEnable() {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("HTTP startup canceled before TLS initialization: %w", err)
 		}
-		// If TLS is enabled, append TLS options
 		tlsOption, err := h.tlsLoad()
 		if err != nil {
 			return fmt.Errorf("failed to load TLS configuration: %w", err)
@@ -592,7 +575,6 @@ func (h *ServiceHttp) startupWithContext(ctx context.Context) error {
 		opts = append(opts, tlsOption)
 	}
 
-	// Create the HTTP server instance
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("HTTP startup canceled before server creation: %w", err)
 	}
@@ -652,10 +634,9 @@ func (h *ServiceHttp) startupWithContext(ctx context.Context) error {
 	}
 	h.publishRuntimeContract(true, true)
 
-	// Success - clear cleanup function
+	// Startup succeeded; disarm the failure cleanup.
 	cleanup = nil
 
-	// Log successful startup
 	log.Infof("HTTP service successfully started with monitoring endpoints and performance optimizations")
 	return nil
 }
@@ -797,7 +778,6 @@ func (h *ServiceHttp) CleanupTasks() error {
 }
 
 func (h *ServiceHttp) cleanupWithContext(parentCtx context.Context) error {
-	// If the server instance is nil, return immediately
 	if h.server == nil {
 		return nil
 	}
@@ -805,24 +785,19 @@ func (h *ServiceHttp) cleanupWithContext(parentCtx context.Context) error {
 	log.Infof("Starting graceful shutdown of HTTP service")
 	h.publishRuntimeContract(false, false)
 
-	// Set shutdown flag with mutex protection
 	h.shutdownMu.Lock()
 	h.isShuttingDown = true
 	h.shutdownMu.Unlock()
 
-	// Close shutdown channel only once
 	h.shutdownOnce.Do(func() {
 		close(h.shutdownChan)
 	})
 
-	// Stop background metrics goroutine
 	h.stopMetricsLoop()
 
-	// Configure shutdown timeout with proper context handling
 	ctx, cancel := h.createShutdownContext(parentCtx)
 	defer cancel()
 
-	// Gracefully stop the server
 	if err := h.server.Stop(ctx); err != nil {
 		log.Errorf("Failed to stop HTTP server gracefully: %v", err)
 		return plugins.NewPluginError(h.ID(), "Stop", "Failed to stop HTTP server gracefully", err)

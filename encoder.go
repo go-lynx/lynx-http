@@ -53,12 +53,9 @@ func shouldOmitSuccessData(data any) bool {
 	}
 }
 
-// ResponseEncoder encodes response data into a standardized JSON format.
+// ResponseEncoder wraps data in the standard {code,data} envelope and writes it as JSON.
+// Success uses code=200; an empty payload omits the data field to avoid emitting "data":{}.
 // 成功时 code=200；无载荷时不输出 data 字段（避免出现 "data":{}）。
-// w is the HTTP response writer used to send the response to the client.
-// r is the HTTP request object (currently unused).
-// data is the response payload to encode.
-// Returns an error if encoding fails.
 func ResponseEncoder(w http.ResponseWriter, r *http.Request, data any) error {
 	res := &Response{
 		Code: 200,
@@ -83,7 +80,6 @@ func ResponseEncoder(w http.ResponseWriter, r *http.Request, data any) error {
 		w.WriteHeader(nhttp.StatusInternalServerError)
 		return marshalErr
 	}
-	// Write the JSON data to the HTTP response
 	_, wErr := w.Write(body)
 	if wErr != nil {
 		return wErr

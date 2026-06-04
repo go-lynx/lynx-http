@@ -177,7 +177,6 @@ func TracerLogPackWithMetrics(service *ServiceHttp) middleware.Middleware {
 				log.InfofCtx(ctx, httpRequestLogFormat, api, endpoint, clientIP, headersStr, summarizePayload(req))
 			}
 
-			// Inflight counter and request size metrics
 			if service != nil && service.inflightRequests != nil {
 				service.inflightRequests.WithLabelValues(api).Inc()
 				defer service.inflightRequests.WithLabelValues(api).Dec()
@@ -191,10 +190,8 @@ func TracerLogPackWithMetrics(service *ServiceHttp) middleware.Middleware {
 				}
 			}
 
-			// Handle the request
 			reply, err = handler(ctx, req)
 
-			// Choose log level based on presence of error
 			duration := time.Since(start)
 			respHeadersStr := fmt.Sprintf("%#v", sanitizeHeaders(tr.ReplyHeader()))
 			respBody := summarizePayload(reply)
@@ -214,14 +211,11 @@ func TracerLogPackWithMetrics(service *ServiceHttp) middleware.Middleware {
 					api, endpoint, duration, err, respHeadersStr, respBody)
 			}
 
-			// Record monitoring metrics (if the service instance is available)
 			if service != nil {
-				// Record request duration
 				if service.requestDuration != nil {
 					service.requestDuration.WithLabelValues(method, metricPath).Observe(duration.Seconds())
 				}
 
-				// Record request count
 				if service.requestCounter != nil {
 					status := "success"
 					if err != nil {
@@ -230,7 +224,6 @@ func TracerLogPackWithMetrics(service *ServiceHttp) middleware.Middleware {
 					service.requestCounter.WithLabelValues(method, metricPath, status).Inc()
 				}
 
-				// Record response size
 				if service.responseSize != nil && reply != nil {
 					if msg, ok := reply.(proto.Message); ok {
 						if data, marshalErr := proto.Marshal(msg); marshalErr == nil {
@@ -239,7 +232,6 @@ func TracerLogPackWithMetrics(service *ServiceHttp) middleware.Middleware {
 					}
 				}
 
-				// Record errors
 				if err != nil {
 					service.recordErrorMetric(method, metricPath, "tracer_error")
 				}
