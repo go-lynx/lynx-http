@@ -186,9 +186,10 @@ func (h *ServiceHttp) InitializeResources(rt plugins.Runtime) error {
 	h.conf = &conf.Http{}
 
 	// Scan and load HTTP configuration from runtime config
-	err := rt.GetConfig().Value(confPrefix).Scan(h.conf)
-	if err != nil {
-		log.Warnf("Failed to load HTTP configuration, using defaults: %v", err)
+	if cfg := rt.GetConfig(); cfg != nil {
+		if err := cfg.Value(confPrefix).Scan(h.conf); err != nil {
+			log.Warnf("Failed to load HTTP configuration, using defaults: %v", err)
+		}
 	}
 
 	// Set default configuration
