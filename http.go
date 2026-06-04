@@ -23,19 +23,11 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-// Plugin metadata.
 const (
-	// pluginName is the unique identifier for the HTTP server plugin.
-	pluginName = "http.server"
-
-	// pluginVersion indicates the current version of the HTTP server plugin.
-	pluginVersion = "v1.6.1"
-
-	// pluginDescription briefly describes the functionality of the HTTP server plugin.
+	pluginName        = "http.server"
+	pluginVersion     = "v1.6.1"
 	pluginDescription = "http server plugin for lynx framework"
-
-	// confPrefix is the configuration prefix used when loading HTTP server settings.
-	confPrefix = "lynx.http"
+	confPrefix        = "lynx.http"
 )
 
 // ServiceHttp implements the HTTP server plugin for the Lynx framework.
