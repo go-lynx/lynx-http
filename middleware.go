@@ -116,16 +116,24 @@ func (h *ServiceHttp) connectionLimitMiddleware() middleware.Middleware {
 		return func(ctx context.Context, req any) (reply any, err error) {
 			h.ensureSemaphores()
 
+			// Snapshot both semaphore channels under the read-lock so that a
+			// concurrent Configure() replacing them cannot cause a nil-check
+			// TOCTOU or a mismatched release (defer sending to the wrong channel).
+			h.confMu.RLock()
+			connectionSem := h.connectionSem
+			requestSem := h.requestSem
+			h.confMu.RUnlock()
+
 			// First semaphore caps total in-flight requests (maxConnections).
-			if h.connectionSem != nil {
+			if connectionSem != nil {
 				select {
-				case h.connectionSem <- struct{}{}:
+				case connectionSem <- struct{}{}:
 					if h.maxConnections > 0 && h.connectionMetricsEnabled() {
 						newCount := atomic.AddInt32(&h.activeConnectionsCount, 1)
 						h.UpdateConnectionPoolUsage(newCount, int32(h.maxConnections))
 					}
 					defer func() {
-						<-h.connectionSem
+						<-connectionSem
 						if h.maxConnections > 0 && h.connectionMetricsEnabled() {
 							newCount := atomic.AddInt32(&h.activeConnectionsCount, -1)
 							if newCount < 0 {
@@ -143,10 +151,10 @@ func (h *ServiceHttp) connectionLimitMiddleware() middleware.Middleware {
 			}
 
 			// Second semaphore caps concurrent requests (maxConcurrentRequests).
-			if h.requestSem != nil {
+			if requestSem != nil {
 				select {
-				case h.requestSem <- struct{}{}:
-					defer func() { <-h.requestSem }()
+				case requestSem <- struct{}{}:
+					defer func() { <-requestSem }()
 				default:
 					method, path := requestMetadata(ctx)
 					h.recordErrorMetric(method, path, "request_limit_exceeded")

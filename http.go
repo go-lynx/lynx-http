@@ -96,6 +96,8 @@ type ServiceHttp struct {
 	metricsRootCancel context.CancelFunc
 	metricsCtx        context.Context
 	metricsCancel     context.CancelFunc
+	// closed by the metrics goroutine when it exits; nil when no goroutine is running
+	metricsLoopDone chan struct{}
 	// Port availability check cache to avoid hammering local ports from health probes.
 	// Failures and successes are cached briefly.
 	portCheckCache struct {

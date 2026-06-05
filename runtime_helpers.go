@@ -11,6 +11,7 @@ import (
 	"github.com/go-kratos/kratos/v2/transport"
 	"github.com/go-lynx/lynx"
 	"github.com/go-lynx/lynx-http/conf"
+	"github.com/go-lynx/lynx/log"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -192,10 +193,16 @@ func (h *ServiceHttp) errorLoggingEnabled() bool {
 }
 
 func requestLoggingEnabled(service *ServiceHttp) bool {
+	if service == nil {
+		return true
+	}
 	return service.requestLoggingEnabled()
 }
 
 func errorLoggingEnabled(service *ServiceHttp) bool {
+	if service == nil {
+		return true
+	}
 	return service.errorLoggingEnabled()
 }
 
@@ -338,6 +345,18 @@ func (h *ServiceHttp) reconfigureMetricsLoop() {
 		h.metricsCancel = nil
 		h.metricsCtx = nil
 	}
+	// Wait for the previous goroutine to fully exit before spawning a replacement,
+	// so rapid Configure() calls never accumulate overlapping goroutines.
+	if h.metricsLoopDone != nil {
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-h.metricsLoopDone:
+		case <-timer.C:
+			log.Warnf("connection pool metrics goroutine did not stop within 1s; replacing")
+		}
+		timer.Stop()
+		h.metricsLoopDone = nil
+	}
 
 	if h.connectionPoolUsage != nil && h.connectionMetricsEnabled() {
 		parentCtx := h.metricsRootCtx
@@ -345,7 +364,12 @@ func (h *ServiceHttp) reconfigureMetricsLoop() {
 			parentCtx = context.Background()
 		}
 		h.metricsCtx, h.metricsCancel = context.WithCancel(parentCtx)
-		go h.updateConnectionPoolMetrics(h.metricsCtx)
+		done := make(chan struct{})
+		h.metricsLoopDone = done
+		go func() {
+			defer close(done)
+			h.updateConnectionPoolMetrics(h.metricsCtx)
+		}()
 	}
 }
 
@@ -375,6 +399,10 @@ func (h *ServiceHttp) stopMetricsLoop() {
 		h.metricsCancel()
 		h.metricsCancel = nil
 		h.metricsCtx = nil
+	}
+	if h.metricsLoopDone != nil {
+		<-h.metricsLoopDone
+		h.metricsLoopDone = nil
 	}
 	if h.metricsRootCancel != nil {
 		h.metricsRootCancel()
